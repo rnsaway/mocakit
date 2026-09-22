@@ -96,6 +96,14 @@ describe('httpTransport', () => {
     expect((error as MocaTransportError).cause).toBeDefined();
   }, 10_000);
 
+  it('rejects an unparseable URL without leaking it via the error cause', async () => {
+    const error = await request('http://u:p@ss@h:99999/x').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MocaTransportError);
+    const mocaError = error as MocaTransportError;
+    expect(mocaError.message).not.toContain('p@ss');
+    expect(String(mocaError.cause)).not.toContain('p@ss');
+  });
+
   it('rejects URLs with embedded credentials without leaking the secret', async () => {
     const error = await request('http://admin:s3cret@127.0.0.1:1/service').catch((e: unknown) => e);
     expect(error).toBeInstanceOf(MocaTransportError);

@@ -35,22 +35,24 @@ function networkFailureMessage(safeUrl: string, error: unknown): string {
 }
 
 export const httpTransport: Transport = async ({ url, body, timeoutMs, ignoreSslIssues, signal }) => {
+  // Parse the URL up front, before it can reach undici/fetch: a URL that fails to parse there
+  // ends up embedded verbatim in the thrown error's `cause`, which can include credentials.
+  // Throwing here, with no cause, keeps that raw text out of the error entirely.
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    throw new MocaTransportError('The MOCA service URL is not a valid URL');
+  }
   const safeUrl = redactUrl(url);
 
-  const parsedUrl = (() => {
-    try {
-      return new URL(url);
-    } catch {
-      return undefined;
-    }
-  })();
-  if (parsedUrl !== undefined && (parsedUrl.username !== '' || parsedUrl.password !== '')) {
+  if (parsedUrl.username !== '' || parsedUrl.password !== '') {
     throw new MocaTransportError('The MOCA service URL must not contain credentials; use the username/password settings');
   }
 
   // `addEventListener('abort', ...)` never fires for a signal that is already aborted, so an
-  // already-aborted signal must be checked explicitly here -- otherwise the request would still
-  // be sent, and MOCA commands are not safe to send twice.
+  // already-aborted signal must be checked explicitly here -- the caller has already cancelled,
+  // and MOCA commands have side effects, so this request must not be sent at all.
   if (signal?.aborted === true) {
     throw new MocaTransportError(`Request to ${safeUrl} was aborted`, { cause: signal.reason });
   }
