@@ -6,13 +6,15 @@ export const RESERVED_MEMBERS = new Set<string>([
   'logout',
   'session',
   'constructor',
+  'then',
   ...Object.getOwnPropertyNames(Object.prototype),
 ]);
 
 const capitalize = (word: string): string => word.charAt(0).toUpperCase() + word.slice(1);
 
 export function toMethodBase(command: string): string {
-  const words = command.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const normalized = command.normalize('NFKD').replace(/\p{M}/gu, '');
+  const words = normalized.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   if (words.length === 0) return 'command';
   let name = (words[0] as string) + words.slice(1).map(capitalize).join('');
   if (/^[0-9]/.test(name)) name = `_${name}`;
@@ -25,6 +27,7 @@ export function assignMethodNames(commands: readonly string[]): { names: Map<str
   const names = new Map<string, string>();
   const groups = new Map<string, string[]>();
   for (const command of commands) {
+    if (names.has(command)) continue;
     const base = toMethodBase(command);
     const group = groups.get(base) ?? [];
     group.push(command);

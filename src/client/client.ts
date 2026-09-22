@@ -19,7 +19,7 @@ import type {
 import { redactUrl } from '../util/url.js';
 import { quoteMocaString, renderCommand } from './render.js';
 
-export const MOCA_STATUS = { OK: 0, NO_ROWS: 510, SESSION_EXPIRED: 523 } as const;
+export const MOCA_STATUS = Object.freeze({ OK: 0, NO_ROWS: 510, SESSION_EXPIRED: 523 } as const);
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_AGE_MINUTES = 30;

@@ -29,10 +29,42 @@ export async function writeSnapshot(path: string, snapshot: Snapshot): Promise<v
   await writeFile(path, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
 }
 
+function invalid(path: string, commandName?: string): never {
+  throw new Error(commandName === undefined ? `${path} is not a mocakit snapshot` : `${path} is not a mocakit snapshot: ${commandName}`);
+}
+
+function isValidArg(arg: unknown): arg is SnapshotArg {
+  return (
+    typeof arg === 'object' &&
+    arg !== null &&
+    typeof (arg as Record<string, unknown>).name === 'string' &&
+    typeof (arg as Record<string, unknown>).dtype === 'string' &&
+    typeof (arg as Record<string, unknown>).required === 'boolean'
+  );
+}
+
 export async function readSnapshot(path: string): Promise<Snapshot> {
-  const parsed = JSON.parse(await readFile(path, 'utf8')) as Partial<Snapshot>;
-  if (!Array.isArray(parsed.commands) || typeof parsed.server !== 'string') {
-    throw new Error(`${path} is not a mocakit snapshot`);
+  const raw = (await readFile(path, 'utf8')).replace(/^﻿/, '');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${path} is not valid JSON: ${message}`);
   }
+
+  if (typeof parsed !== 'object' || parsed === null) invalid(path);
+  const candidate = parsed as Record<string, unknown>;
+  if (typeof candidate.server !== 'string' || !Array.isArray(candidate.commands)) invalid(path);
+
+  for (const command of candidate.commands as unknown[]) {
+    if (typeof command !== 'object' || command === null) invalid(path);
+    const c = command as Record<string, unknown>;
+    const commandName = typeof c.name === 'string' ? c.name : undefined;
+    if (typeof c.name !== 'string' || !Array.isArray(c.args) || !(c.args as unknown[]).every(isValidArg)) {
+      invalid(path, commandName);
+    }
+  }
+
   return parsed as Snapshot;
 }

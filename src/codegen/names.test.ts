@@ -18,8 +18,20 @@ describe('toMethodBase', () => {
     expect(toMethodBase('constructor')).toBe('cmdConstructor');
   });
 
+  it('prefixes "then" so client instances are never mistaken for thenables', () => {
+    expect(toMethodBase('then')).toBe('cmdThen');
+  });
+
   it('falls back to "command" for names with no alphanumerics', () => {
     expect(toMethodBase('---')).toBe('command');
+  });
+
+  it('strips diacritics before splitting into words', () => {
+    expect(toMethodBase('ünïcödé list')).toBe('unicodeList');
+  });
+
+  it('falls back to "command" for fully non-Latin names', () => {
+    expect(toMethodBase('日本')).toBe('command');
   });
 });
 
@@ -33,6 +45,15 @@ describe('assignMethodNames', () => {
       ['list lines', 'listLines'],
     ]);
     expect(collisions).toEqual([['list orders', 'list-orders', 'list_orders']]);
+  });
+
+  it('de-duplicates exact repeats without renaming or reporting a collision', () => {
+    const { names, collisions } = assignMethodNames(['a', 'a', 'b']);
+    expect([...names.entries()]).toEqual([
+      ['a', 'a'],
+      ['b', 'b'],
+    ]);
+    expect(collisions).toEqual([]);
   });
 });
 

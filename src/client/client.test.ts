@@ -11,7 +11,7 @@ import {
 } from '../errors.js';
 import { MemorySessionStore } from '../session/store.js';
 import type { CommandSpec, MocaConfig } from '../types.js';
-import { MocaClient } from './client.js';
+import { MOCA_STATUS, MocaClient } from './client.js';
 
 const ORDERS = mocaXml(0, {
   columns: [{ name: 'ordnum', type: 'S' }, { name: 'ordqty', type: 'I' }, { name: 'cancel_flg', type: 'O' }],
@@ -473,5 +473,11 @@ describe('MocaClient additional environment and result coverage', () => {
     // The session was still evicted: the next call logs in again.
     await moca.exec('a').catch(() => undefined);
     expect(fake.requests.map((r) => r.query.split(' ')[0])).toEqual(['login', 'a', 'logout', 'login', 'a']);
+  });
+});
+
+describe('MOCA_STATUS', () => {
+  it('is frozen', () => {
+    expect(Object.isFrozen(MOCA_STATUS)).toBe(true);
   });
 });

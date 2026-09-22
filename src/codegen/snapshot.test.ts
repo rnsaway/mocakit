@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -22,5 +22,44 @@ describe('snapshot IO', () => {
     const path = join(await mkdtemp(join(tmpdir(), 'mocakit-')), 'bad.json');
     await writeSnapshot(path, { nope: true } as never);
     await expect(readSnapshot(path)).rejects.toThrow(/not a mocakit snapshot/);
+  });
+
+  it('loads a file with a leading BOM', async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'mocakit-')), 'bom.json');
+    const snapshot: Snapshot = {
+      mocakitVersion: '0.1.0',
+      generatedAt: '2026-09-22T00:00:00.000Z',
+      server: 'https://m/service',
+      commands: [],
+    };
+    await writeFile(path, `﻿${JSON.stringify(snapshot)}`, 'utf8');
+    expect(await readSnapshot(path)).toEqual(snapshot);
+  });
+
+  it('rejects a file that is JSON null', async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'mocakit-')), 'null.json');
+    await writeFile(path, 'null', 'utf8');
+    await expect(readSnapshot(path)).rejects.toThrow(/not a mocakit snapshot/);
+  });
+
+  it('rejects invalid JSON with a JSON-specific message', async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'mocakit-')), 'invalid.json');
+    await writeFile(path, '{ not json', 'utf8');
+    await expect(readSnapshot(path)).rejects.toThrow(/is not valid JSON/);
+  });
+
+  it('rejects a command with no args, naming the offending command', async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'mocakit-')), 'noargs.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        mocakitVersion: '0.1.0',
+        generatedAt: '2026-09-22T00:00:00.000Z',
+        server: 'https://m/service',
+        commands: [{ name: 'list orders' }],
+      }),
+      'utf8',
+    );
+    await expect(readSnapshot(path)).rejects.toThrow(/not a mocakit snapshot.*list orders/);
   });
 });

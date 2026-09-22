@@ -15,9 +15,9 @@ export function globToRegExp(glob: string): RegExp {
 }
 
 export function filterCommands(commands: SnapshotCommand[], filter: CommandFilter): SnapshotCommand[] {
-  const include = (filter.include ?? ['*']).map(globToRegExp);
+  const include = (filter.include?.length ? filter.include : ['*']).map(globToRegExp);
   const exclude = (filter.exclude ?? []).map(globToRegExp);
-  const levels = filter.levels?.map((level) => level.toLowerCase());
+  const levels = filter.levels?.length ? filter.levels.map((level) => level.toLowerCase()) : undefined;
   return commands.filter(
     (command) =>
       include.some((re) => re.test(command.name)) &&

@@ -31,4 +31,12 @@ describe('filterCommands', () => {
   it('filters by level case-insensitively and drops commands without a level', () => {
     expect(names({ levels: ['wmd', 'usrint'] })).toEqual(['list orders', 'list order lines', 'usr my command']);
   });
+
+  it('treats an empty include array as the default wildcard', () => {
+    expect(names({ include: [] })).toHaveLength(5);
+  });
+
+  it('treats an empty levels array as no level filter', () => {
+    expect(names({ levels: [] })).toHaveLength(5);
+  });
 });
