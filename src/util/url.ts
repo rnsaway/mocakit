@@ -8,6 +8,6 @@ export function redactUrl(url: string): string {
     parsed.hash = '';
     return parsed.toString();
   } catch {
-    return url;
+    return '<invalid URL>';
   }
 }

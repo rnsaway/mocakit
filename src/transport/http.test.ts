@@ -26,6 +26,19 @@ afterEach(async () => {
   await new Promise<void>((resolve) => instance.close(() => resolve()));
 });
 
+/**
+ * Returns a port that is free at the moment of the call, by briefly listening on port 0 and
+ * closing again. Port 1 is an undici "bad port" (it refuses the request before even attempting
+ * a connection), so it does not exercise a real ECONNREFUSED.
+ */
+async function getFreePort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const port = (probe.address() as AddressInfo).port;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
+}
+
 const request = (url: string, extra: Partial<Parameters<typeof httpTransport>[0]> = {}) =>
   httpTransport({ url, body: '<moca-request/>', timeoutMs: 2_000, ignoreSslIssues: false, ...extra });
 
@@ -66,8 +79,19 @@ describe('httpTransport', () => {
     await expect(pending).rejects.toThrow(/aborted/);
   });
 
+  it('throws immediately for an already-aborted signal, without sending the request', async () => {
+    let requestsReceived = 0;
+    const url = await serve((_req, _body, res) => {
+      requestsReceived += 1;
+      res.end('<moca-response/>');
+    });
+    await expect(request(url, { signal: AbortSignal.abort() })).rejects.toThrow(/aborted/);
+    expect(requestsReceived).toBe(0);
+  });
+
   it('wraps connection failures', async () => {
-    const error = await request('http://127.0.0.1:1/service').catch((e: unknown) => e);
+    const port = await getFreePort();
+    const error = await request(`http://127.0.0.1:${port}/service`).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(MocaTransportError);
     expect((error as MocaTransportError).cause).toBeDefined();
   }, 10_000);
@@ -80,12 +104,11 @@ describe('httpTransport', () => {
     expect(String(mocaError.cause)).not.toContain('s3cret');
   }, 10_000);
 
-  it('does not leak credentials from the URL in the empty-body message', async () => {
-    const url = await serve((_req, _body, res) => res.end('   '));
-    const parsed = new URL(url);
-    parsed.username = 'admin';
-    parsed.password = 's3cret';
-    const error = await request(parsed.toString()).catch((e: unknown) => e);
+  it('does not leak a URL query token in the empty-body message', async () => {
+    const base = await serve((_req, _body, res) => res.end('   '));
+    const url = `${base}?token=s3cret`;
+    const error = await request(url).catch((e: unknown) => e);
+    expect((error as MocaTransportError).message).toMatch(/empty response/);
     expect((error as MocaTransportError).message).not.toContain('s3cret');
   });
 
@@ -99,8 +122,9 @@ describe('httpTransport', () => {
   });
 
   it('includes the underlying cause code/message for network failures', async () => {
-    const error = await request('http://127.0.0.1:1/service').catch((e: unknown) => e);
-    expect((error as MocaTransportError).message).toMatch(/ECONNREFUSED|failed/i);
+    const port = await getFreePort();
+    const error = await request(`http://127.0.0.1:${port}/service`).catch((e: unknown) => e);
+    expect((error as MocaTransportError).message).toMatch(/ECONNREFUSED/);
   }, 10_000);
 
   it('rejects redirects instead of silently following them', async () => {

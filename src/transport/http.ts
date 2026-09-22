@@ -48,6 +48,13 @@ export const httpTransport: Transport = async ({ url, body, timeoutMs, ignoreSsl
     throw new MocaTransportError('The MOCA service URL must not contain credentials; use the username/password settings');
   }
 
+  // `addEventListener('abort', ...)` never fires for a signal that is already aborted, so an
+  // already-aborted signal must be checked explicitly here -- otherwise the request would still
+  // be sent, and MOCA commands are not safe to send twice.
+  if (signal?.aborted === true) {
+    throw new MocaTransportError(`Request to ${safeUrl} was aborted`, { cause: signal.reason });
+  }
+
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {

@@ -8,7 +8,7 @@ describe('redactUrl', () => {
     );
   });
 
-  it('returns unparseable input unchanged', () => {
-    expect(redactUrl('not a url')).toBe('not a url');
+  it('returns a fixed placeholder for unparseable input', () => {
+    expect(redactUrl('not a url')).toBe('<invalid URL>');
   });
 });
