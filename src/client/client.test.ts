@@ -142,7 +142,11 @@ describe('MocaClient login, logout and session', () => {
     expect(error.command).not.toContain("p''w");
     expect(JSON.stringify(error)).not.toContain("p''w");
     expect(String(error.cause)).not.toContain("p''w");
-    expect(inspect(error, { getters: true })).not.toContain("p''w");
+    // toJSON() (rather than `inspect(error, { getters: true })`, which never actually
+    // surfaced `command` here) is what util.inspect and other loggers would show for this
+    // error's own data, so inspect that directly.
+    expect(inspect(error.toJSON())).not.toContain("p''w");
+    expect(inspect(error.toJSON())).toContain('command');
   });
 
   it('login() returns the converted login row and makes the session active', async () => {
@@ -207,6 +211,32 @@ describe('MocaClient shared login error isolation', () => {
       expect(error.command).toMatch(/^login user where usr_id = 'JDOE' and usr_pswd = '\*\*\*'$/);
     }
   });
+
+  it('does not leak args when the shared post-523 re-login fails', async () => {
+    // The initial login succeeds (so both calls get to the command), every command attempt
+    // then gets a 523, and the *re*-login (triggered by the retry) fails. That re-login is
+    // itself single-flight and shared by both concurrent calls.
+    let loginCount = 0;
+    const fake = fakeMoca((r) => {
+      if (r.query.startsWith('login user')) {
+        loginCount += 1;
+        return loginCount === 1 ? loginOk() : mocaXml(1, {}, 're-login failed');
+      }
+      return mocaXml(523, {}, 'Session expired');
+    });
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    const spec: CommandSpec = ['list orders', [['wh_id', 'S', 1]]];
+
+    const [first, second] = (await Promise.all([
+      moca.call(spec, { wh_id: 'A' }).catch((e: unknown) => e),
+      moca.call(spec, { wh_id: 'B' }).catch((e: unknown) => e),
+    ])) as [MocaAuthError, MocaAuthError];
+
+    for (const error of [first, second]) {
+      expect(error).toBeInstanceOf(MocaAuthError);
+      expect(error.args).toBeUndefined();
+    }
+  });
 });
 
 describe('MocaClient protected environment keys', () => {
@@ -234,10 +264,11 @@ describe('MocaClient protected environment keys', () => {
 
 describe('MocaClient abort handling while waiting for a login', () => {
   it('rejects promptly when the caller aborts while a login is in flight, without cancelling the login', async () => {
+    const LOGIN_DELAY_MS = 1_000;
     let loginSettled = false;
     const fake = fakeMoca(async (r) => {
       if (r.query.startsWith('login user')) {
-        await new Promise((resolve) => setTimeout(resolve, 60));
+        await new Promise((resolve) => setTimeout(resolve, LOGIN_DELAY_MS));
         loginSettled = true;
         return loginOk();
       }
@@ -255,12 +286,14 @@ describe('MocaClient abort handling while waiting for a login', () => {
 
     expect(error).toBeInstanceOf(MocaTransportError);
     expect(error.message).toMatch(/aborted/);
-    expect(elapsed).toBeLessThan(50);
+    // Comfortably below LOGIN_DELAY_MS: proves the caller did not wait for the login,
+    // without being so tight that scheduler jitter makes the test flaky.
+    expect(elapsed).toBeLessThan(200);
     expect(loginSettled).toBe(false);
 
-    // The shared login is still running in the background; let it finish so it doesn't leak
-    // into a later test via the shared session store.
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    // The login is not cancelled by the abort -- it keeps running in the background (shared
+    // with any other concurrent caller). Let it finish so it doesn't leak into a later test.
+    await new Promise((resolve) => setTimeout(resolve, LOGIN_DELAY_MS));
     expect(loginSettled).toBe(true);
   });
 
@@ -276,6 +309,34 @@ describe('MocaClient abort handling while waiting for a login', () => {
     expect(error).toBeInstanceOf(MocaTransportError);
     expect(error.message).toMatch(/aborted/);
     expect(requests).toHaveLength(before);
+  });
+
+  it('never starts a login for a pre-aborted call with no cached session, and raises no unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    try {
+      // A login that, if it were ever started, would fail -- proving it really never runs.
+      const fake = fakeMoca(() => mocaXml(1, {}, 'login would fail'));
+      const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+
+      const error = (await moca
+        .exec('list orders', { signal: AbortSignal.abort() })
+        .catch((e: unknown) => e)) as MocaTransportError;
+
+      expect(error).toBeInstanceOf(MocaTransportError);
+      expect(error.message).toMatch(/aborted/);
+      expect(fake.requests).toHaveLength(0);
+
+      // Flush the microtask/macrotask queue so any rejection from a login that was started
+      // (and never awaited by anything) would have surfaced as an unhandled rejection.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
   });
 
   it('checks the signal before retrying after a 523, instead of always retrying', async () => {
@@ -325,6 +386,18 @@ describe('MocaClient constructor validation', () => {
     expect(() => new MocaClient({ ...baseConfig, password: '' })).toThrow(MocaArgumentError);
   });
 
+  it('rejects a blank (whitespace-only) url/username/password', () => {
+    expect(() => new MocaClient({ ...baseConfig, url: '   ' })).toThrow(MocaArgumentError);
+    expect(() => new MocaClient({ ...baseConfig, username: '   ' })).toThrow(MocaArgumentError);
+    expect(() => new MocaClient({ ...baseConfig, password: '   ' })).toThrow(MocaArgumentError);
+  });
+
+  it('rejects a non-string password (e.g. undefined slipping past a loose caller)', () => {
+    expect(() => new MocaClient({ ...baseConfig, password: undefined as unknown as string })).toThrow(
+      MocaArgumentError,
+    );
+  });
+
   it('rejects a non-finite session.maxAgeMinutes', () => {
     expect(() => new MocaClient({ ...baseConfig, session: { maxAgeMinutes: Number.NaN } })).toThrow(MocaArgumentError);
     expect(() => new MocaClient({ ...baseConfig, session: { maxAgeMinutes: Number.POSITIVE_INFINITY } })).toThrow(
@@ -336,6 +409,12 @@ describe('MocaClient constructor validation', () => {
     expect(() => new MocaClient({ ...baseConfig, timeoutMs: 0 })).toThrow(MocaArgumentError);
     expect(() => new MocaClient({ ...baseConfig, timeoutMs: -1 })).toThrow(MocaArgumentError);
     expect(() => new MocaClient({ ...baseConfig, timeoutMs: Number.NaN })).toThrow(MocaArgumentError);
+  });
+
+  it('rejects a timeoutMs beyond the 32-bit signed integer range', () => {
+    expect(() => new MocaClient({ ...baseConfig, timeoutMs: 2_147_483_648 })).toThrow(MocaArgumentError);
+    // The cap itself is still valid.
+    expect(() => new MocaClient({ ...baseConfig, timeoutMs: 2_147_483_647 })).not.toThrow();
   });
 });
 

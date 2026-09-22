@@ -23,6 +23,9 @@ export const MOCA_STATUS = { OK: 0, NO_ROWS: 510, SESSION_EXPIRED: 523 } as cons
 
 const DEFAULT_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_AGE_MINUTES = 30;
+/** Node's `setTimeout`/HTTP layers ultimately store a delay as a 32-bit signed int; anything
+ * beyond this either overflows or is silently clamped, so reject it up front instead. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 export interface MocaClientDeps {
   transport?: Transport;
@@ -36,6 +39,12 @@ interface ResolvedOptions {
   autocommit: boolean;
   env: Record<string, string> | undefined;
   signal: AbortSignal | undefined;
+}
+
+/** Also catches non-string values (e.g. `undefined`) that slipped past the compile-time type,
+ * such as from a config assembled dynamically at runtime. */
+function isBlank(value: string): boolean {
+  return typeof value !== 'string' || value.trim() === '';
 }
 
 function pick(row: MocaRow | undefined, column: string, fallbackPosition: number): string | null {
@@ -65,14 +74,20 @@ export class MocaClient {
   readonly #sessions: SessionManager;
 
   constructor(config: MocaConfig, deps: MocaClientDeps = {}) {
-    if (config.url === '') throw new MocaArgumentError('MocaConfig.url must not be empty', 'url');
-    if (config.username === '') throw new MocaArgumentError('MocaConfig.username must not be empty', 'username');
-    if (config.password === '') throw new MocaArgumentError('MocaConfig.password must not be empty', 'password');
+    if (isBlank(config.url)) throw new MocaArgumentError('MocaConfig.url must not be empty', 'url');
+    if (isBlank(config.username)) throw new MocaArgumentError('MocaConfig.username must not be empty', 'username');
+    if (isBlank(config.password)) throw new MocaArgumentError('MocaConfig.password must not be empty', 'password');
     if (config.session?.maxAgeMinutes !== undefined && !Number.isFinite(config.session.maxAgeMinutes)) {
       throw new MocaArgumentError('MocaConfig.session.maxAgeMinutes must be a finite number', 'session.maxAgeMinutes');
     }
-    if (config.timeoutMs !== undefined && !(Number.isFinite(config.timeoutMs) && config.timeoutMs > 0)) {
-      throw new MocaArgumentError('MocaConfig.timeoutMs must be a positive, finite number of milliseconds', 'timeoutMs');
+    if (
+      config.timeoutMs !== undefined &&
+      !(Number.isFinite(config.timeoutMs) && config.timeoutMs > 0 && config.timeoutMs <= MAX_TIMEOUT_MS)
+    ) {
+      throw new MocaArgumentError(
+        `MocaConfig.timeoutMs must be a positive, finite number of milliseconds not exceeding ${MAX_TIMEOUT_MS}`,
+        'timeoutMs',
+      );
     }
 
     this.#config = config;
@@ -172,32 +187,44 @@ export class MocaClient {
       this.#enrich(error, command, args);
     }
 
-    // Session acquisition is deliberately kept out of the enrichment try/catch below. A
-    // single-flight login's rejection is the *same error object*, by reference, handed to
-    // every concurrent caller awaiting that login (see SessionManager); enriching it here
-    // with this call's `command`/`args` would leak one caller's args onto every other
-    // caller's error. `#login` already attaches the (redacted) login command itself.
+    // Both #acquireSession calls below (the initial one, and the post-523 retry's re-login)
+    // are deliberately kept out of the enrichment try/catch. A single-flight login's
+    // rejection is the *same error object*, by reference, handed to every concurrent caller
+    // awaiting that login (see SessionManager); enriching it here with this call's
+    // `command`/`args` would leak one caller's args onto every other caller's error.
+    // `#login` already attaches the (redacted) login command itself.
     let session = await this.#acquireSession(options.signal);
 
-    try {
-      let response = await this.#post(command, this.#environment(session, options.env), options.autocommit, options.signal);
+    let response = await this.#postEnriched(command, args, session, options);
+    if (response.status === MOCA_STATUS.SESSION_EXPIRED) {
+      await this.#sessions.invalidate(session);
+      if (options.signal?.aborted === true) {
+        this.#enrich(
+          new MocaTransportError(`Request to ${redactUrl(this.#config.url)} was aborted`, { cause: options.signal.reason }),
+          command,
+          args,
+        );
+      }
+
+      // Retrying is safe: MOCA rejects an invalid/expired session before executing the
+      // command itself, so re-sending under a freshly logged-in session cannot cause the
+      // command to run (or its side effects to apply) twice. This is the only automatic
+      // retry mocakit performs (spec §10).
+      session = await this.#acquireSession(options.signal);
+      response = await this.#postEnriched(command, args, session, options);
       if (response.status === MOCA_STATUS.SESSION_EXPIRED) {
         await this.#sessions.invalidate(session);
-        this.#throwIfAborted(options.signal);
-
-        // Retrying is safe: MOCA rejects an invalid/expired session before executing the
-        // command itself, so re-sending under a freshly logged-in session cannot cause the
-        // command to run (or its side effects to apply) twice. This is the only automatic
-        // retry mocakit performs (spec §10).
-        session = await this.#acquireSession(options.signal);
-        response = await this.#post(command, this.#environment(session, options.env), options.autocommit, options.signal);
-        if (response.status === MOCA_STATUS.SESSION_EXPIRED) {
-          await this.#sessions.invalidate(session);
-          throw new MocaAuthError('The MOCA session expired again immediately after logging in', {
+        this.#enrich(
+          new MocaAuthError('The MOCA session expired again immediately after logging in', {
             status: MOCA_STATUS.SESSION_EXPIRED,
-          });
-        }
+          }),
+          command,
+          args,
+        );
       }
+    }
+
+    try {
       return this.#shape(response, options);
     } catch (error) {
       this.#enrich(error, command, args);
@@ -213,6 +240,21 @@ export class MocaClient {
     throw error;
   }
 
+  /** Posts `command`, enriching (only) errors raised by that post itself -- never a shared
+   * session-acquisition error, which callers must handle separately. */
+  async #postEnriched(
+    command: string,
+    args: Record<string, unknown> | undefined,
+    session: SessionState,
+    options: ResolvedOptions,
+  ): Promise<RawResponse> {
+    try {
+      return await this.#post(command, this.#environment(session, options.env), options.autocommit, options.signal);
+    } catch (error) {
+      this.#enrich(error, command, args);
+    }
+  }
+
   #throwIfAborted(signal: AbortSignal | undefined): void {
     if (signal?.aborted === true) {
       throw new MocaTransportError(`Request to ${redactUrl(this.#config.url)} was aborted`, { cause: signal.reason });
@@ -223,11 +265,17 @@ export class MocaClient {
    * Resolves to a fresh session, racing the wait against `signal` without cancelling the
    * underlying login: that login may be a single-flight shared with other callers, and one
    * caller aborting its own wait must not stop it for everyone else.
+   *
+   * The abort check happens *before* `SessionManager#acquire` is even called: a signal that
+   * is already aborted must not start a login (or touch the store) at all. Calling `acquire`
+   * first and only checking the signal afterwards would both send a needless request and, if
+   * that login rejects, leave its rejection with no attached handler once this method has
+   * already returned via the abort path -- an unhandled rejection.
    */
   async #acquireSession(signal: AbortSignal | undefined): Promise<SessionState> {
+    if (signal !== undefined) this.#throwIfAborted(signal);
     const acquiring = this.#sessions.acquire();
     if (signal === undefined) return acquiring;
-    this.#throwIfAborted(signal);
 
     return new Promise<SessionState>((resolve, reject) => {
       const onAbort = (): void => {
