@@ -397,24 +397,36 @@ runs the CLI from source against a real server into `examples/moca.generated.ts`
 
 ### Emitted file
 
-A single `moca.generated.ts`, deterministic for a given snapshot:
+A single `moca.generated.ts`, deterministic for a given snapshot. Commands are de-duplicated (case- and
+whitespace-insensitively; the lowest code-unit name wins, with a warning) and sorted before emitting. Repeated
+argument names within a command are de-duplicated case-insensitively (first wins, with a warning).
 
 - A header comment with the mocakit version, server URL (never credentials), command count and
-  `/* eslint-disable camelcase */`.
+  `/* eslint-disable */`.
+- `export type MocaCommandName = 'list orders' | ...`.
 - One `export interface <Pascal>Args` per command that has arguments. Each property has JSDoc with its description
-  and dtype, and required args are non-optional.
-- A `const specs = { ... } as const` table: `[mocaName, [[argName, dtype, required], ...]]`.
-- `export function createMoca(config: MocaConfig)`, which returns a `MocaClient` augmented with one method per
-  command:
+  and dtype, and required args are non-optional. Server text in JSDoc is sanitised (`*/`, leading `@`, backticks).
+- A `const S = { ... } as const satisfies Record<string, mk.CommandSpec>` table:
+  `[mocaName, [[argName, dtype, required], ...]]`.
+- An interface/class pair. The methods are typed as properties through shared generic callable interfaces exported by
+  mocakit, so the type-checker handles thousands of commands cheaply (a class with three overloads per method cost
+  ~14 s / 550 MB of `tsc` at 5,000 commands):
 
   ```ts
-  /** `list orders` · level: wmd · <description> */
-  listOrders<T = Output<'list orders'>>(args: ListOrdersArgs, opts?: CallOptions & { format?: 'rows' }): Promise<T[]>;
-  listOrders<T = Output<'list orders'>>(args: ListOrdersArgs, opts: CallOptions & { format: 'full' }): Promise<MocaResult<T>>;
+  export interface Moca extends mk.MocaClient {
+    /** `list orders` · level: wmd · <description> */
+    listOrders: mk.Command<ListOrdersArgs, "list orders">;                    // has required args
+    listActiveCommands: mk.OptionalArgsCommand<mk.NoArgs, "list active commands">; // no required args
+  }
+  export class Moca extends mk.MocaClient {}
+  mk.defineCommands(Moca.prototype, S); // installs non-enumerable methods that call this.call(spec, args, opts)
+  export function createMoca(config: mk.MocaConfig, deps?: mk.MocaClientDeps): Moca;
   ```
 
-  If a command has no required args, `args` is optional.
-- `export type MocaCommandName = 'list orders' | ...`.
+  `Command`/`OptionalArgsCommand` each have three call signatures: `RowsOptions` → `T[]`, `FullOptions` →
+  `MocaResult<T>`, and plain `CallOptions` → the union. `T` defaults to `Output<C>` and is wrapped in `NoInfer`, so it
+  can only be set explicitly (`moca.listOrders<MyRow>(...)`), never inferred from an annotation. Consumers need
+  TypeScript ≥ 5.4.
 
 ### dtype → TS type
 
