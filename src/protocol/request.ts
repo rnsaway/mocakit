@@ -5,7 +5,7 @@ export type MocaEnvironment = Record<string, string | null | undefined>;
 
 // eslint-disable-next-line no-control-regex
 const XML_FORBIDDEN_CHAR =
-  /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 function assertXmlSafe(value: string, argument: string): void {
   if (XML_FORBIDDEN_CHAR.test(value)) {
