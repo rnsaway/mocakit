@@ -7,6 +7,7 @@ import {
   MocaProtocolError,
   MocaTransportError,
   isMocaStatus,
+  redactArgs,
   redactCommand,
 } from './errors.js';
 
@@ -45,5 +46,67 @@ describe('errors', () => {
     expect(redactCommand(`login user where usr_id = 'A' and usr_pswd = 'p''w'`)).toBe(
       `login user where usr_id = 'A' and usr_pswd = '***'`,
     );
+  });
+
+  it('redactCommand is case-insensitive and matches without spaces around =', () => {
+    expect(redactCommand(`login user where USR_PSWD = 'A'`)).toBe(`login user where USR_PSWD = '***'`);
+    expect(redactCommand(`login user where usr_pswd='x'`)).toBe(`login user where usr_pswd='***'`);
+  });
+
+  it('redactCommand handles double-quoted values', () => {
+    expect(redactCommand(`login user where usr_pswd = "p""w"`)).toBe(`login user where usr_pswd = '***'`);
+  });
+
+  it('redactCommand matches keys containing pswd/password as a substring', () => {
+    expect(redactCommand(`update x set old_pswd = 'a'`)).toBe(`update x set old_pswd = '***'`);
+    expect(redactCommand(`update x set password = 'a'`)).toBe(`update x set password = '***'`);
+  });
+
+  it('redactCommand redacts two occurrences in one command', () => {
+    expect(redactCommand(`x usr_pswd = 'a' and old_password = 'b'`)).toBe(
+      `x usr_pswd = '***' and old_password = '***'`,
+    );
+  });
+
+  it('redactCommand is a no-op when there is nothing to redact', () => {
+    expect(redactCommand(`list orders where ordnum = 'A'`)).toBe(`list orders where ordnum = 'A'`);
+  });
+
+  it('redactArgs replaces password-like keys with ***', () => {
+    expect(redactArgs({ usr_pswd: 's', wh_id: 'W' })).toEqual({ usr_pswd: '***', wh_id: 'W' });
+  });
+
+  it('centralises redaction on MocaError.command and .args', () => {
+    const err = new MocaError('x', { command: "login user where usr_pswd = 'a'" });
+    expect(err.command).toBe("login user where usr_pswd = '***'");
+
+    err.args = { usr_pswd: 's', wh_id: 'W' };
+    expect(err.args).toEqual({ usr_pswd: '***', wh_id: 'W' });
+
+    expect(JSON.stringify(err)).not.toContain('"s"');
+    expect(JSON.stringify(err)).not.toContain("'a'");
+  });
+
+  it('supports ??= compound assignment on command and args', () => {
+    const err = new MocaError('x');
+    err.command ??= "login user where usr_pswd = 'a'";
+    err.args ??= { usr_pswd: 's' };
+    expect(err.command).toBe("login user where usr_pswd = '***'");
+    expect(err.args).toEqual({ usr_pswd: '***' });
+  });
+
+  it('each subclass has a fixed name and is instanceof MocaError', () => {
+    expect(new MocaError('x').name).toBe('MocaError');
+    expect(new MocaCommandError(1, null).name).toBe('MocaCommandError');
+    expect(new MocaAuthError('x').name).toBe('MocaAuthError');
+    expect(new MocaTransportError('x').name).toBe('MocaTransportError');
+    expect(new MocaProtocolError('x', '<a>').name).toBe('MocaProtocolError');
+    expect(new MocaArgumentError('x').name).toBe('MocaArgumentError');
+
+    expect(new MocaCommandError(1, null)).toBeInstanceOf(MocaError);
+    expect(new MocaAuthError('x')).toBeInstanceOf(MocaError);
+    expect(new MocaTransportError('x')).toBeInstanceOf(MocaError);
+    expect(new MocaProtocolError('x', '<a>')).toBeInstanceOf(MocaError);
+    expect(new MocaArgumentError('x')).toBeInstanceOf(MocaError);
   });
 });

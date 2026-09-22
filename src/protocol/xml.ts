@@ -19,11 +19,14 @@ const MIN_SURROGATE = 0xd800;
 const MAX_SURROGATE = 0xdfff;
 
 export function escapeXmlText(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r/g, '&#13;');
 }
 
 export function escapeXmlAttribute(value: string): string {
-  return escapeXmlText(value).replace(/"/g, '&quot;');
+  return escapeXmlText(value)
+    .replace(/"/g, '&quot;')
+    .replace(/\t/g, '&#9;')
+    .replace(/\n/g, '&#10;');
 }
 
 function fromCodePoint(match: string, code: number): string {

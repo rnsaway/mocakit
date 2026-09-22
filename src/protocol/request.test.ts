@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { MocaArgumentError } from '../errors.js';
 import { buildRequest } from './request.js';
 
 describe('buildRequest', () => {
@@ -31,5 +32,13 @@ describe('buildRequest', () => {
     const xml = buildRequest('x', { A: undefined, B: null, C: '', D: 'd' });
     expect(xml).not.toMatch(/name="[ABC]"/);
     expect(xml).toContain('<var name="D" value="d"/>');
+  });
+
+  it('throws MocaArgumentError when the query contains an XML 1.0-forbidden character', () => {
+    expect(() => buildRequest('a\u0001b')).toThrow(MocaArgumentError);
+  });
+
+  it('throws MocaArgumentError when an environment value contains an XML 1.0-forbidden character', () => {
+    expect(() => buildRequest('x', { A: 'a\u0001b' })).toThrow(MocaArgumentError);
   });
 });

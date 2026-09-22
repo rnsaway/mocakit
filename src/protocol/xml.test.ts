@@ -15,6 +15,11 @@ describe('escaping', () => {
     expect(escapeXmlAttribute(`a & "c"`)).toBe('a &amp; &quot;c&quot;');
   });
 
+  it('escapes tab, newline and carriage return in attributes, and carriage return in text', () => {
+    expect(escapeXmlAttribute('a\tb\nc\rd')).toBe('a&#9;b&#10;c&#13;d');
+    expect(escapeXmlText('a\rb')).toBe('a&#13;b');
+  });
+
   it('decodes named, decimal and hex entities and leaves unknown ones alone', () => {
     expect(decodeXmlEntities('&lt;&gt;&amp;&quot;&apos;&#65;&#x42;&bogus;')).toBe(`<>&"'AB&bogus;`);
   });
