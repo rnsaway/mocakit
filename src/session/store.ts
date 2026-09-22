@@ -13,6 +13,12 @@ export interface SessionState {
  * password. A persistent store such as Redis or a file should restrict read access to its
  * keys, or re-hash the key with a secret before using it, since anyone who can read a key
  * and knows (or guesses) the URL/username can brute-force short passwords offline.
+ *
+ * `get`, `set` and `delete` are not atomic with respect to each other, and callers such as
+ * `SessionManager#invalidate` build compare-then-delete on top of them (read the current
+ * value, then delete only if it still matches). A Redis-backed implementation that wants to
+ * close that race can additionally expose an atomic compare-and-delete (e.g. a Lua script or
+ * `WATCH`/`MULTI`) for its own invalidate path.
  */
 export interface SessionStore {
   get(cacheKey: string): Promise<SessionState | undefined>;

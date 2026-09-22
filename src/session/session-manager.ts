@@ -12,6 +12,14 @@ export interface SessionManagerOptions {
 /** In-flight logins, per store and cache key, so concurrent callers share one login. */
 const inFlight = new WeakMap<SessionStore, Map<string, Promise<SessionState>>>();
 
+/**
+ * Caches a MOCA session, checks its freshness, and single-flights logins.
+ *
+ * A login in flight is shared by every `SessionManager` using the same `store` and `cacheKey`
+ * (see the module-level `inFlight` map), not just by this instance. Whichever client happens
+ * to start that login runs it with its own settings (transport, timeout, credentials), so the
+ * result other clients receive was produced under settings they did not choose.
+ */
 export class SessionManager {
   #current: SessionState | null = null;
   readonly #options: SessionManagerOptions;
@@ -36,17 +44,20 @@ export class SessionManager {
     return this.#current;
   }
 
-  /** Returns a fresh session if one is cached, without logging in. Evicts stale entries. */
+  /**
+   * Returns a fresh session if one is cached, without logging in.
+   *
+   * A stale entry is left in the store rather than deleted: this read may be looking at a
+   * snapshot that is already out of date (another client can have written a fresh session to
+   * the store while this call was in flight), and deleting on that basis could destroy a newer
+   * session we never saw. The next successful login overwrites the stale entry instead.
+   */
   async peek(): Promise<SessionState | null> {
     if (this.#current !== null && this.isFresh(this.#current)) return this.#current;
     this.#current = null;
     const { store, cacheKey } = this.#options;
     const cached = await store.get(cacheKey);
-    if (cached === undefined) return null;
-    if (!this.isFresh(cached)) {
-      await store.delete(cacheKey);
-      return null;
-    }
+    if (cached === undefined || !this.isFresh(cached)) return null;
     this.#current = cached;
     return cached;
   }
@@ -76,6 +87,11 @@ export class SessionManager {
     if (existing !== undefined) return existing;
 
     const promise = (async () => {
+      // Re-check the store immediately before logging in: another process sharing this store
+      // (with its own in-memory single-flight map) may have finished a login while we were
+      // getting here, and there is no point paying for a second one.
+      const recheck = await store.get(cacheKey);
+      if (recheck !== undefined && this.isFresh(recheck)) return recheck;
       const state = await login();
       await store.set(cacheKey, state);
       return state;

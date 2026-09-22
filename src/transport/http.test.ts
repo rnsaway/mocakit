@@ -71,4 +71,43 @@ describe('httpTransport', () => {
     expect(error).toBeInstanceOf(MocaTransportError);
     expect((error as MocaTransportError).cause).toBeDefined();
   }, 10_000);
+
+  it('rejects URLs with embedded credentials without leaking the secret', async () => {
+    const error = await request('http://admin:s3cret@127.0.0.1:1/service').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MocaTransportError);
+    const mocaError = error as MocaTransportError;
+    expect(mocaError.message).not.toContain('s3cret');
+    expect(String(mocaError.cause)).not.toContain('s3cret');
+  }, 10_000);
+
+  it('does not leak credentials from the URL in the empty-body message', async () => {
+    const url = await serve((_req, _body, res) => res.end('   '));
+    const parsed = new URL(url);
+    parsed.username = 'admin';
+    parsed.password = 's3cret';
+    const error = await request(parsed.toString()).catch((e: unknown) => e);
+    expect((error as MocaTransportError).message).not.toContain('s3cret');
+  });
+
+  it('times out while reading a stalled response body', async () => {
+    const url = await serve((_req, _body, res) => {
+      res.writeHead(200);
+      res.write('<moca');
+      // never end the response
+    });
+    await expect(request(url, { timeoutMs: 150 })).rejects.toThrow(/timed out/);
+  });
+
+  it('includes the underlying cause code/message for network failures', async () => {
+    const error = await request('http://127.0.0.1:1/service').catch((e: unknown) => e);
+    expect((error as MocaTransportError).message).toMatch(/ECONNREFUSED|failed/i);
+  }, 10_000);
+
+  it('rejects redirects instead of silently following them', async () => {
+    const url = await serve((_req, _body, res) => {
+      res.writeHead(302, { Location: '/elsewhere' });
+      res.end();
+    });
+    await expect(request(url)).rejects.toBeInstanceOf(MocaTransportError);
+  });
 });
