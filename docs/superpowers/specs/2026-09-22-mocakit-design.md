@@ -236,7 +236,7 @@ Rules:
 
   | MOCA column type | JS value |
   |---|---|
-  | `I`, `L`, `F`, `N`, `INTEGER`, `LONG`, `FLOAT`, `NUMBER` | `number` (non-numeric text left as string) |
+  | `I`, `L`, `F`, `N`, `INTEGER`, `LONG`, `FLOAT`, `NUMBER` | `number` when the text is a finite decimal; integers beyond `Number.MAX_SAFE_INTEGER` and other text stay strings |
   | `O`, `BOOLEAN` | `boolean` (`1`/`true` → `true`, `0`/`false` → `false`) |
   | `D`, `DATE`, `DATETIME` | `string` (unchanged MOCA date string) |
   | nested `moca-results` | `MocaRow[]` (recursively converted) |
@@ -273,9 +273,9 @@ changes.
 
 - All date logic lives in `src/dates/` behind two functions. Nothing else in the codebase formats or parses
   dates.
-  - `formatMocaDate(d: Date): string` returns `YYYYMMDDHH24MISS` (14 digits, 24-hour clock, local time zone).
-  - `parseMocaDate(s: string): Date` accepts the 14-digit form, interprets it as local time, and throws
-    `RangeError` on anything else.
+  - `formatMocaDate(d: Date): string` returns `YYYYMMDDHH24MISS` (14 digits, 24-hour clock, local time zone); years outside 0–9999 throw `RangeError`.
+  - `parseMocaDate(s: string): Date` accepts exactly the 14-digit form (no trimming), interprets it as local time, and
+    throws `RangeError` on anything else, including times that fall in a DST gap in the local time zone.
 - Argument rendering (§6) calls `formatMocaDate`.
 - Date columns in responses stay as the unchanged MOCA string.
 - Neither `MocaConfig` nor `CallOptions` has date options in v1.
@@ -470,5 +470,6 @@ around them:
 1. Column names returned by `list active commands` and `list active command arguments`.
 2. Whether `list active command arguments` works unfiltered.
 3. The dtype and column-type code sets (for the mapping tables in §8 and §11).
+4. Whether MOCA ever sends an empty `<field></field>` for an empty string (mocakit currently reads it as NULL).
 
 (`logout user` is confirmed to exist.)
