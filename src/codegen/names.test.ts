@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assignMethodNames, isIdentifier, toMethodBase, toPascal } from './names.js';
+import { MocaClient } from '../client/client.js';
+import { assignMethodNames, isIdentifier, RESERVED_MEMBERS, toMethodBase, toPascal } from './names.js';
 
 describe('toMethodBase', () => {
   it('camel-cases words split on non-alphanumerics', () => {
@@ -54,6 +55,14 @@ describe('assignMethodNames', () => {
       ['b', 'b'],
     ]);
     expect(collisions).toEqual([]);
+  });
+});
+
+describe('RESERVED_MEMBERS', () => {
+  it('covers every own property name of MocaClient.prototype', () => {
+    for (const name of Object.getOwnPropertyNames(MocaClient.prototype)) {
+      expect(RESERVED_MEMBERS.has(name)).toBe(true);
+    }
   });
 });
 

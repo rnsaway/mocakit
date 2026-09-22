@@ -25,7 +25,11 @@ export interface OptionalArgsCommand<A, C extends string> {
 export function defineCommands(proto: MocaClient, specs: Readonly<Record<string, CommandSpec>>): void {
   const entries = Object.entries(specs);
   for (const [name] of entries) {
-    if (name in proto) throw new Error(`Cannot define command method "${name}": the name is already a member of the client`);
+    if (name in proto) {
+      throw new Error(
+        `Cannot define command method "${name}": the name is already a member of the client; regenerate the client with the installed mocakit version`,
+      );
+    }
   }
   for (const [name, spec] of entries) {
     Object.defineProperty(proto, name, {

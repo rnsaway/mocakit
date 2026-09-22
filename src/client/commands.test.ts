@@ -28,8 +28,12 @@ describe('defineCommands', () => {
 
   it('throws when a name clashes with an existing member on the prototype chain', () => {
     class Other extends MocaClient {}
-    expect(() => defineCommands(Other.prototype, { exec: EXEC_SPEC })).toThrow(/exec/);
-    expect(() => defineCommands(Other.prototype, { toString: EXEC_SPEC })).toThrow(/toString/);
+    expect(() => defineCommands(Other.prototype, { exec: EXEC_SPEC })).toThrow(
+      /exec.*regenerate the client with the installed mocakit version/,
+    );
+    expect(() => defineCommands(Other.prototype, { toString: EXEC_SPEC })).toThrow(
+      /toString.*regenerate the client with the installed mocakit version/,
+    );
     expect(Object.getOwnPropertyNames(Other.prototype)).toEqual(['constructor']);
   });
 });
