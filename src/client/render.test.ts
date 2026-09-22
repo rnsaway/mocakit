@@ -62,6 +62,44 @@ describe('renderCommand', () => {
     const noArgs: CommandSpec = ['list active commands', []];
     expect(renderCommand(noArgs, undefined, undefined, defaultDateCodec)).toBe('list active commands');
   });
+
+  it('rethrows date codec formatting failures as a MocaArgumentError named after the argument', () => {
+    let caught: unknown;
+    try {
+      render({ wh_id: 'W', adddte: new Date(10000, 0, 1) });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(MocaArgumentError);
+    expect((caught as InstanceType<typeof MocaArgumentError>).argument).toBe('adddte');
+  });
+
+  it('rejects unsafe integers and exponent notation, but allows negatives and decimals', () => {
+    expect(() => render({ wh_id: 'W', ordqty: 2 ** 64 })).toThrow(MocaArgumentError);
+    expect(() => render({ wh_id: 'W', ordqty: 1e21 })).toThrow(MocaArgumentError);
+    expect(() => render({ wh_id: 'W', ordqty: 1e-7 })).toThrow(MocaArgumentError);
+    expect(render({ wh_id: 'W', ordqty: -5 })).toBe(`list orders where wh_id = 'W' and ordqty = -5`);
+    expect(render({ wh_id: 'W', ordqty: 2.5 })).toBe(`list orders where wh_id = 'W' and ordqty = 2.5`);
+  });
+
+  it('treats inherited properties like "constructor" as absent, not present', () => {
+    const specWithCtor: CommandSpec = ['list x', [['constructor', 'S', 1]]];
+    expect(() => renderCommand(specWithCtor, {}, undefined, defaultDateCodec)).toThrow(
+      /Missing required argument "constructor"/,
+    );
+  });
+
+  it('rejects an extraArgs key that matches a declared name ignoring case', () => {
+    expect(() => render({ wh_id: 'W' }, { WH_ID: 'x' })).toThrow(/declared/);
+  });
+
+  it('rejects extraArgs keys that duplicate each other ignoring case', () => {
+    expect(() => render({ wh_id: 'W' }, { prtnum: 'P1', PRTNUM: 'P2' })).toThrow(/duplicat/i);
+  });
+
+  it('rejects an args key matching a declared name in a different case, pointing at the declared spelling', () => {
+    expect(() => render({ WH_ID: 'x' })).toThrow(/declared spelling/i);
+  });
 });
 
 describe('quoteMocaString', () => {

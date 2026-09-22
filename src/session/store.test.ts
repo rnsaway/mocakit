@@ -21,4 +21,10 @@ describe('sessionCacheKey', () => {
     expect(key).not.toBe(sessionCacheKey('https://m/service', 'JDOE', 'other'));
     expect(key).not.toContain('secret');
   });
+
+  it('encodes fields unambiguously so a boundary shift does not collide', () => {
+    const a = sessionCacheKey('u\np', 'q', 'x');
+    const b = sessionCacheKey('u', 'p\nq', 'x');
+    expect(a).not.toBe(b);
+  });
 });
