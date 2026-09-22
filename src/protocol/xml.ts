@@ -15,6 +15,8 @@ const NAMED_ENTITIES: Record<string, string> = {
 };
 
 const MAX_CODE_POINT = 0x10ffff;
+const MIN_SURROGATE = 0xd800;
+const MAX_SURROGATE = 0xdfff;
 
 export function escapeXmlText(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -25,18 +27,20 @@ export function escapeXmlAttribute(value: string): string {
 }
 
 function fromCodePoint(match: string, code: number): string {
-  return Number.isNaN(code) || code > MAX_CODE_POINT ? match : String.fromCodePoint(code);
+  const isValid =
+    !Number.isNaN(code) && code > 0 && code <= MAX_CODE_POINT && (code < MIN_SURROGATE || code > MAX_SURROGATE);
+  return isValid ? String.fromCodePoint(code) : match;
 }
 
 export function decodeXmlEntities(value: string): string {
-  return value.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity: string) => {
+  return value.replace(/&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity: string) => {
     if (entity.startsWith('#x') || entity.startsWith('#X')) {
       return fromCodePoint(match, Number.parseInt(entity.slice(2), 16));
     }
     if (entity.startsWith('#')) {
       return fromCodePoint(match, Number.parseInt(entity.slice(1), 10));
     }
-    return NAMED_ENTITIES[entity] ?? match;
+    return Object.hasOwn(NAMED_ENTITIES, entity) ? (NAMED_ENTITIES[entity] as string) : match;
   });
 }
 
