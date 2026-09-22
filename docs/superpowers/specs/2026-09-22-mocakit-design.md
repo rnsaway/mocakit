@@ -94,6 +94,7 @@ src/
   session/    session-manager.ts, store.ts                   login, cache, single-flight, 523 recovery
   client/     client.ts, render.ts, errors.ts, types.ts      MocaClient, where-clause rendering, error mapping
   codegen/    introspect.ts, snapshot.ts, names.ts, emit.ts  introspection + TS emission
+  dates/      codec.ts                                       formatMocaDate, parseMocaDate, DateCodec (§8a)
   config.ts                                                  defineConfig + config loading
   cli.ts                                                     `mocakit generate`
   index.ts                                                   public exports
@@ -165,8 +166,8 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
 - `exec<T = MocaRow>(moca: string, opts?)`: sends raw MOCA text. The caller is responsible for quoting.
 - `call<T>(spec, args, opts?)`: used by generated functions; validates, renders, executes.
 - `login()`: forces a login now (fail fast); returns the login row.
-- `logout()`: sends `logout user` if the server supports it (verify against a live server during
-  implementation; if absent, skip the server call), then evicts the cached session.
+- `logout()`: sends `logout user`, then evicts the cached session. The session is evicted even if the
+  server call fails, and the error is then rethrown.
 - `session`: read-only `{ active: boolean; locale: string | null; ageMs: number | null }`. The key is never exposed.
 
 ## 6. Argument rendering
@@ -180,18 +181,19 @@ list orders where wh_id = 'WMD1' and ordqty = 5
 
 Rules:
 
-1. Arguments whose value is `undefined` are omitted.
-2. A required argument that is missing or `undefined` throws `MocaArgumentError` before any request.
-   (TypeScript also catches this at compile time.)
+1. Arguments whose value is `undefined` or `null` are removed from the `where` clause entirely. They are never
+   sent as `''`.
+2. A required argument that is missing, `undefined` or `null` throws `MocaArgumentError` before any request.
+   (TypeScript also catches missing required args at compile time.)
 3. Strings are single-quoted, and embedded `'` becomes `''`.
 4. Numbers are rendered unquoted. `NaN`/`Infinity` throws `MocaArgumentError`.
 5. Booleans are rendered as `1` / `0`.
-6. `Date` values are rendered as `'YYYYMMDDHHmmss'` in local time (MOCA date format).
-7. `null` is rendered as `''`. MOCA has no NULL literal in a where clause, so an empty string is the closest
-   equivalent.
-8. Order: declared arguments in spec order, then `extraArgs` in insertion order.
-9. A command with no args renders as the bare command name.
-10. Argument names are validated as `/^[A-Za-z_][A-Za-z0-9_]*$/`. Anything else throws `MocaArgumentError`, which
+6. `Date` values are rendered as a quoted 14-digit string in the Oracle-style format `YYYYMMDDHH24MISS` (24-hour
+   clock), using the local time zone: `new Date(2026, 8, 22, 14, 5, 9)` → `'20260922140509'`. An invalid `Date`
+   throws `MocaArgumentError`. Formatting goes through the dates module (§8a).
+7. Order: declared arguments in spec order, then `extraArgs` in insertion order.
+8. A command with no args, or whose args were all removed, renders as the bare command name.
+9. Argument names are validated as `/^[A-Za-z_][A-Za-z0-9_]*$/`. Anything else throws `MocaArgumentError`, which
     blocks injection through `extraArgs` keys.
 
 ## 7. Session caching
@@ -244,7 +246,7 @@ Rules:
   string.
 - `convert: false` leaves every value as `string | null` or nested rows.
 - Status 510 returns `[]` unless `noRowsIsError` is set.
-- `parseMocaDate(s: string): Date` is exported as a helper.
+- `parseMocaDate(s: string): Date` is exported as a helper (§8a).
 
 ### `format: 'full'` → `Promise<MocaResult<T>>`
 
@@ -258,8 +260,44 @@ interface MocaResult<T> { status: number; message: string | null; columns: MocaC
 ```ts
 type MocaValue = string | number | boolean | null | MocaRow[];
 type MocaRow = Record<string, MocaValue>;
-type MocaArgValue = string | number | boolean | Date | null | undefined;
+type MocaArgValue = string | number | boolean | Date | null | undefined; // null/undefined → omitted
 ```
+
+## 8a. Dates (v1 scope and room to grow)
+
+v1 keeps date handling minimal, but puts it all in one place so later versions can extend it without breaking
+changes.
+
+**v1 behavior**
+
+- All date logic lives in `src/dates/` behind two functions. Nothing else in the codebase formats or parses
+  dates.
+  - `formatMocaDate(d: Date): string` returns `YYYYMMDDHH24MISS` (14 digits, 24-hour clock, local time zone).
+  - `parseMocaDate(s: string): Date` accepts the 14-digit form, interprets it as local time, and throws
+    `RangeError` on anything else.
+- Argument rendering (§6) calls `formatMocaDate`.
+- Date columns in responses stay as the unchanged MOCA string.
+- Neither `MocaConfig` nor `CallOptions` has date options in v1.
+
+**Built for extension**
+
+- Date behavior will later be configured through an optional `dates` object on both `MocaConfig` and
+  `CallOptions`, with per-call settings overriding the client. v1 reserves the name `dates` and doesn't define
+  it. Future fields are additive and optional, so adding them isn't a breaking change.
+- Internally, rendering and conversion receive a `DateCodec` (`{ format(d: Date): string; parse(s: string): Date }`)
+  instead of calling the functions directly. v1 always passes the default codec, so a future version can swap
+  codecs without touching the render or convert code.
+- The default response value for date columns (a string) will not change in a minor version. Returning `Date`
+  objects will be opt-in (e.g. `dates: { columns: 'date' }`) until a major version.
+
+**Candidate future enhancements** (not in v1)
+
+- Time zone control: UTC or a named IANA zone instead of the process-local zone, which matters when the MOCA
+  server's zone differs from the client's.
+- Converting date columns to `Date` (or `Temporal.PlainDateTime` once Node ships Temporal), with typed output.
+- Date-only values (`YYYYMMDD`) and other formats, such as partial timestamps from custom commands.
+- Accepting ISO strings or `Temporal` values as date arguments.
+- A custom `DateCodec` supplied by the user.
 
 ## 9. Output typing
 
@@ -382,7 +420,7 @@ A single `moca.generated.ts`, deterministic for a given snapshot:
 | date (`D`, …) | `string \| Date` |
 | unknown | `string` |
 
-All argument types also accept `null` (rendered as `''`). The exact dtype codes are confirmed against the live
+All optional argument types also accept `null`, which removes the argument just like `undefined`. The exact dtype codes are confirmed against the live
 server.
 
 ### Naming
@@ -409,8 +447,10 @@ server.
 - **Vitest**, colocated `*.test.ts`.
 - **Protocol:** XML fixtures for normal, empty, NULL, duplicate columns, nested results, 510, 523, error with
   message, entities/CDATA, malformed body.
-- **Render:** quoting, escaping, numbers, booleans, dates, null, undefined omission, missing required arg,
-  invalid extraArgs key.
+- **Render:** quoting, escaping, numbers, booleans, dates, `null` and `undefined` removal (never `''`),
+  `null` for a required arg, missing required arg, invalid extraArgs key.
+- **Dates:** `formatMocaDate` uses the 24-hour clock (e.g. 14:05:09 → `140509`), zero-pads, rejects invalid
+  `Date`s. `parseMocaDate` round-trips and rejects malformed input.
 - **Session** (fake transport + fake clock): lazy login, cache sharing across clients, `reuse: false`, max-age
   expiry, single-flight under 20 concurrent calls (exactly one login), failed login not cached, 523 → one re-login
   and one retry, second 523 → `MocaAuthError`.
@@ -428,4 +468,5 @@ around them:
 1. Column names returned by `list active commands` and `list active command arguments`.
 2. Whether `list active command arguments` works unfiltered.
 3. The dtype and column-type code sets (for the mapping tables in §8 and §11).
-4. Whether `logout user` exists.
+
+(`logout user` is confirmed to exist.)
