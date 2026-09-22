@@ -16,8 +16,15 @@ export interface EmitResult {
 
 const str = (value: string): string => JSON.stringify(value);
 
+const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Makes server text safe inside a JSDoc comment: no terminator, no tags, one line. */
 function doc(text: string): string {
-  return text.replace(/\*\//g, '*\\/').replace(/\s+/g, ' ').trim();
+  return text
+    .replace(/\*\//g, '*\\/')
+    .replace(/(^|[^\w\\])@/g, '$1\\@')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function tsType(dtype: string): string {
@@ -34,20 +41,44 @@ function tsType(dtype: string): string {
 }
 
 function propertyName(name: string): string {
-  return isIdentifier(name) ? name : str(name);
+  return isIdentifier(name) && name !== '__proto__' ? name : str(name);
 }
 
-/** Drops repeats (same name ignoring case and whitespace runs; first wins), then sorts by name. */
-function normalizeCommands(commands: readonly SnapshotCommand[]): SnapshotCommand[] {
-  const seen = new Set<string>();
-  const unique: SnapshotCommand[] = [];
-  for (const command of commands) {
+/**
+ * Drops repeated commands (same name ignoring case and whitespace runs), keeping the one whose name
+ * sorts lowest, and repeated argument names (ignoring case), keeping the first. Returns the commands
+ * sorted by name, so the output does not depend on input order.
+ */
+function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: SnapshotCommand[]; warnings: string[] } {
+  const warnings: string[] = [];
+  const sorted = [...commands].sort(
+    (a, b) => byCodeUnit(a.name, b.name) || byCodeUnit(JSON.stringify(a), JSON.stringify(b)),
+  );
+  const kept = new Map<string, SnapshotCommand>();
+  const result: SnapshotCommand[] = [];
+  for (const command of sorted) {
     const key = command.name.trim().replace(/\s+/g, ' ').toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(command);
+    const existing = kept.get(key);
+    if (existing !== undefined) {
+      warnings.push(`Command ${str(command.name)} duplicates ${str(existing.name)}; kept ${str(existing.name)}`);
+      continue;
+    }
+    kept.set(key, command);
+
+    const seenArgs = new Set<string>();
+    const args: SnapshotArg[] = [];
+    for (const arg of command.args) {
+      const argKey = arg.name.toLowerCase();
+      if (seenArgs.has(argKey)) {
+        warnings.push(`Command ${str(command.name)} lists argument ${str(arg.name)} more than once; kept the first`);
+        continue;
+      }
+      seenArgs.add(argKey);
+      args.push(arg);
+    }
+    result.push(args.length === command.args.length ? command : { ...command, args });
   }
-  return unique.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return { commands: result, warnings };
 }
 
 function emitArgsInterface(name: string, args: SnapshotArg[]): string[] {
@@ -67,33 +98,28 @@ function emitSpec(method: string, command: SnapshotCommand): string {
   return `  ${method}: [${str(command.name)}, [${args}]],`;
 }
 
-function emitMethod(method: string, argsType: string, command: SnapshotCommand): string[] {
+function emitMember(method: string, argsType: string, command: SnapshotCommand): string[] {
   const hasRequired = command.args.some((arg) => arg.required);
-  const generic = `<T = mk.Output<${str(command.name)}>>`;
   const summary = doc(
-    [`\`${command.name}\``, command.level ? `level: ${command.level}` : '', command.description ?? ''].filter(Boolean).join(' · '),
+    [`\`${command.name.replace(/`/g, "'")}\``, command.level ? `level: ${command.level}` : '', command.description ?? '']
+      .filter(Boolean)
+      .join(' · '),
   );
-  const rowsArgs = hasRequired ? `args: ${argsType}` : `args?: ${argsType}`;
-  const fullArgs = hasRequired ? `args: ${argsType}` : `args: ${argsType} | undefined`;
-  return [
-    `  /** ${summary} */`,
-    `  ${method}${generic}(${rowsArgs}, opts?: mk.RowsOptions): Promise<T[]>;`,
-    `  ${method}${generic}(${fullArgs}, opts: mk.FullOptions): Promise<mk.MocaResult<T>>;`,
-    `  ${method}${generic}(${rowsArgs}, opts?: mk.CallOptions): Promise<T[] | mk.MocaResult<T>>;`,
-    `  ${method}(args?: ${argsType}, opts?: mk.CallOptions): Promise<unknown> {`,
-    `    return this.call(S.${method}, args, opts);`,
-    '  }',
-    '',
-  ];
+  const callable = hasRequired ? 'mk.Command' : 'mk.OptionalArgsCommand';
+  return [`  /** ${summary} */`, `  ${method}: ${callable}<${argsType}, ${str(command.name)}>;`];
 }
 
 export function emit(snapshot: Snapshot, options: EmitOptions): EmitResult {
-  const commands = normalizeCommands(snapshot.commands);
+  const normalized = normalizeCommands(snapshot.commands);
+  const commands = normalized.commands;
   const { names, collisions } = assignMethodNames(commands.map((command) => command.name));
-  const warnings = collisions.map(
-    (group) =>
-      `Commands ${group.map(str).join(', ')} map to the same method name; generated ${group.map((c) => names.get(c)).join(', ')}`,
-  );
+  const warnings = [
+    ...normalized.warnings,
+    ...collisions.map(
+      (group) =>
+        `Commands ${group.map(str).join(', ')} map to the same method name; generated ${group.map((c) => names.get(c)).join(', ')}`,
+    ),
+  ];
 
   const lines: string[] = [
     `// AUTO-GENERATED by mocakit ${options.version} from ${redactUrl(snapshot.server)} — ${commands.length} commands.`,
@@ -126,11 +152,11 @@ export function emit(snapshot: Snapshot, options: EmitOptions): EmitResult {
   for (const command of commands) lines.push(emitSpec(names.get(command.name) as string, command));
   lines.push('} as const satisfies Record<string, mk.CommandSpec>;', '');
 
-  lines.push('export class Moca extends mk.MocaClient {');
+  lines.push('export interface Moca extends mk.MocaClient {');
   for (const command of commands) {
-    lines.push(...emitMethod(names.get(command.name) as string, argTypes.get(command.name) as string, command));
+    lines.push(...emitMember(names.get(command.name) as string, argTypes.get(command.name) as string, command));
   }
-  lines.push('}', '');
+  lines.push('}', '', 'export class Moca extends mk.MocaClient {}', 'mk.defineCommands(Moca.prototype, S);', '');
 
   lines.push(
     'export function createMoca(config: mk.MocaConfig, deps?: mk.MocaClientDeps): Moca {',

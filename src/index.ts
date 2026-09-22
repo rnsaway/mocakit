@@ -1,6 +1,7 @@
 import type { MocaRow } from './types.js';
 
 export { MOCA_STATUS, MocaClient, type MocaClientDeps } from './client/client.js';
+export { defineCommands, type Command, type OptionalArgsCommand } from './client/commands.js';
 export { defaultDateCodec, formatMocaDate, parseMocaDate, type DateCodec } from './dates/codec.js';
 export { defineConfig, type MocakitConfig } from './define-config.js';
 export {

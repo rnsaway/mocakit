@@ -24,7 +24,12 @@ export async function check(): Promise<void> {
   const either = await moca.listOrders({ wh_id: 'W' }, opts);
   const eitherUnknown: unknown = either;
 
-  const rows: MocaRow[] = await moca.listActiveCommands();
+  const rows = await moca.listActiveCommands();
+  const firstRow: MocaRow | undefined = rows[0];
+  // @ts-expect-error cannot re-type the result through the annotation
+  const bad: Array<{ nope: string }> = await moca.listActiveCommands();
+  // @ts-expect-error NoArgs rejects unknown keys
+  await moca.listActiveCommands({ x: 1 });
   await moca.cmdExec();
   await moca.listOrders_2();
   await moca.createInventory();
@@ -42,5 +47,5 @@ export async function check(): Promise<void> {
   await moca.listOrders({ wh_id: null });
 
   const args: ListOrdersArgs = { wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null, 'odd-name': 'x' };
-  void [qty, status, fullRows, x, eitherUnknown, rows, args];
+  void [qty, status, fullRows, x, eitherUnknown, firstRow, bad, args];
 }

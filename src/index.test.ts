@@ -16,6 +16,7 @@ describe('public API', () => {
         'MocaTransportError',
         'VERSION',
         'defaultDateCodec',
+        'defineCommands',
         'defineConfig',
         'formatMocaDate',
         'httpTransport',

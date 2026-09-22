@@ -31,31 +31,21 @@ describe('emit', () => {
     );
   });
 
-  it('emits overloaded methods on a MocaClient subclass', () => {
-    expect(code).toContain('export class Moca extends mk.MocaClient {');
+  it('types commands through shared callable interfaces on a MocaClient subclass', () => {
+    expect(code).toContain('export interface Moca extends mk.MocaClient {');
     expect(code).toContain(
-      `  listOrders<T = mk.Output<"list orders">>(args: ListOrdersArgs, opts?: mk.RowsOptions): Promise<T[]>;`,
+      '  /** `list orders` · level: wmd · Lists orders */\n  listOrders: mk.Command<ListOrdersArgs, "list orders">;',
     );
-    expect(code).toContain(
-      `  listOrders<T = mk.Output<"list orders">>(args: ListOrdersArgs, opts: mk.FullOptions): Promise<mk.MocaResult<T>>;`,
-    );
-    expect(code).toContain(
-      `  listOrders<T = mk.Output<"list orders">>(args: ListOrdersArgs, opts?: mk.CallOptions): Promise<T[] | mk.MocaResult<T>>;`,
-    );
-    expect(code).toContain(`  listActiveCommands<T = mk.Output<"list active commands">>(args?: mk.NoArgs, opts?: mk.RowsOptions): Promise<T[]>;`);
-    expect(code).toContain(
-      `  listActiveCommands<T = mk.Output<"list active commands">>(args?: mk.NoArgs, opts?: mk.CallOptions): Promise<T[] | mk.MocaResult<T>>;`,
-    );
-    expect(code).toContain(`  createInventory<T = mk.Output<"create inventory">>(args?: CreateInventoryArgs, opts?: mk.RowsOptions): Promise<T[]>;`);
-    expect(code).toContain(
-      `  createInventory<T = mk.Output<"create inventory">>(args?: CreateInventoryArgs, opts?: mk.CallOptions): Promise<T[] | mk.MocaResult<T>>;`,
-    );
+    expect(code).toContain(`  listActiveCommands: mk.OptionalArgsCommand<mk.NoArgs, "list active commands">;`);
+    expect(code).toContain(`  createInventory: mk.OptionalArgsCommand<CreateInventoryArgs, "create inventory">;`);
+    expect(code).toContain('export class Moca extends mk.MocaClient {}\nmk.defineCommands(Moca.prototype, S);');
     expect(code).toContain('export function createMoca(config: mk.MocaConfig, deps?: mk.MocaClientDeps): Moca {');
+    expect(code).not.toMatch(/<T = /);
   });
 
   it('handles reserved names, collisions and comment terminators', () => {
-    expect(code).toContain('  cmdExec<');
-    expect(code).toContain('  listOrders_2<');
+    expect(code).toContain('  cmdExec: mk.OptionalArgsCommand<mk.NoArgs, "exec">;');
+    expect(code).toContain('  listOrders_2: mk.OptionalArgsCommand<mk.NoArgs, "list-orders">;');
     expect(code).toContain('Lists *\\/ active commands');
     expect(warnings).toEqual(['Commands "list orders", "list-orders" map to the same method name; generated listOrders, listOrders_2']);
   });
@@ -76,20 +66,78 @@ describe('emit', () => {
     expect(result.warnings).toEqual(warnings);
   });
 
-  it('emits a repeated command once, including one that differs only in case or spacing', () => {
-    const listOrders = snapshot.commands.find((c) => c.name === 'list orders')!;
-    const repeated = {
-      ...snapshot,
-      commands: [
-        ...snapshot.commands,
-        { ...listOrders },
-        { ...listOrders, name: 'LIST ORDERS', args: [] },
-        { ...listOrders, name: ' list  orders ', args: [] },
-      ],
-    };
-    const result = emit(repeated, { version: '0.1.0' });
-    expect(result.code).toBe(code);
-    expect(result.warnings).toEqual(warnings);
-    expect(result.code.match(/export interface ListOrdersArgs \{/g)).toHaveLength(1);
+  it('emits a repeated command once, keeping the lowest-sorting name, whatever the input order', () => {
+    const exec = snapshot.commands.find((c) => c.name === 'exec')!;
+    const variants: Snapshot['commands'] = [
+      { ...exec, name: 'exec', args: [{ name: 'a', dtype: 'S', required: false }] },
+      { ...exec, name: 'EXEC', args: [] },
+      { ...exec, name: ' exec ', args: [] },
+    ];
+    const forward = emit({ ...snapshot, commands: [...snapshot.commands.filter((c) => c !== exec), ...variants] }, { version: '0.1.0' });
+    const backward = emit(
+      { ...snapshot, commands: [...variants].reverse().concat(snapshot.commands.filter((c) => c !== exec)) },
+      { version: '0.1.0' },
+    );
+    expect(backward.code).toBe(forward.code);
+    expect(backward.warnings).toEqual(forward.warnings);
+    // " exec " < "EXEC" < "exec" by code unit.
+    expect(forward.code).toContain('  cmdExec: [" exec ", []],');
+    expect(forward.code).toMatch(/— 5 commands\./);
+    expect(forward.warnings).toEqual([
+      'Command "EXEC" duplicates " exec "; kept " exec "',
+      'Command "exec" duplicates " exec "; kept " exec "',
+      'Commands "list orders", "list-orders" map to the same method name; generated listOrders, listOrders_2',
+    ]);
+  });
+
+  it('keeps the first of repeated argument names, case-insensitively, and warns', () => {
+    const result = emit(
+      {
+        ...snapshot,
+        commands: [
+          {
+            name: 'dup args',
+            args: [
+              { name: 'wh_id', dtype: 'S', required: true },
+              { name: 'WH_ID', dtype: 'I', required: false },
+              { name: 'wh_id', dtype: 'S', required: false },
+            ],
+          },
+        ],
+      },
+      { version: '0.1.0' },
+    );
+    expect(result.code).toContain('  dupArgs: ["dup args", [["wh_id", "S", 1]]],');
+    expect(result.code).not.toContain('WH_ID');
+    expect(result.warnings).toEqual([
+      'Command "dup args" lists argument "WH_ID" more than once; kept the first',
+      'Command "dup args" lists argument "wh_id" more than once; kept the first',
+    ]);
+  });
+
+  it('escapes JSDoc tags and backticks from server text', () => {
+    const result = emit(
+      {
+        ...snapshot,
+        commands: [
+          {
+            name: 'odd `cmd`',
+            description: '@deprecated use {@link x} or mail a@b.c',
+            args: [{ name: 'x', dtype: 'S', required: false, description: '@param evil' }],
+          },
+        ],
+      },
+      { version: '0.1.0' },
+    );
+    expect(result.code).toContain("  /** `odd 'cmd'` · \\@deprecated use {\\@link x} or mail a@b.c */");
+    expect(result.code).toContain('  /** \\@param evil (S) */');
+  });
+
+  it('quotes an argument named __proto__', () => {
+    const result = emit(
+      { ...snapshot, commands: [{ name: 'proto', args: [{ name: '__proto__', dtype: 'S', required: false }] }] },
+      { version: '0.1.0' },
+    );
+    expect(result.code).toContain('  "__proto__"?: string | null;');
   });
 });
