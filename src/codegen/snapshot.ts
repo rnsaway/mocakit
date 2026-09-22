@@ -34,17 +34,18 @@ function invalid(path: string, commandName?: string): never {
 }
 
 function isValidArg(arg: unknown): arg is SnapshotArg {
+  if (typeof arg !== 'object' || arg === null) return false;
+  const a = arg as Record<string, unknown>;
   return (
-    typeof arg === 'object' &&
-    arg !== null &&
-    typeof (arg as Record<string, unknown>).name === 'string' &&
-    typeof (arg as Record<string, unknown>).dtype === 'string' &&
-    typeof (arg as Record<string, unknown>).required === 'boolean'
+    typeof a.name === 'string' &&
+    typeof a.dtype === 'string' &&
+    typeof a.required === 'boolean' &&
+    (a.description === undefined || typeof a.description === 'string')
   );
 }
 
 export async function readSnapshot(path: string): Promise<Snapshot> {
-  const raw = (await readFile(path, 'utf8')).replace(/^﻿/, '');
+  const raw = (await readFile(path, 'utf8')).replace(/^\uFEFF/, '');
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -61,7 +62,16 @@ export async function readSnapshot(path: string): Promise<Snapshot> {
     if (typeof command !== 'object' || command === null) invalid(path);
     const c = command as Record<string, unknown>;
     const commandName = typeof c.name === 'string' ? c.name : undefined;
-    if (typeof c.name !== 'string' || !Array.isArray(c.args) || !(c.args as unknown[]).every(isValidArg)) {
+    const optionalStringsValid =
+      (c.level === undefined || typeof c.level === 'string') &&
+      (c.type === undefined || typeof c.type === 'string') &&
+      (c.description === undefined || typeof c.description === 'string');
+    if (
+      typeof c.name !== 'string' ||
+      !optionalStringsValid ||
+      !Array.isArray(c.args) ||
+      !(c.args as unknown[]).every(isValidArg)
+    ) {
       invalid(path, commandName);
     }
   }

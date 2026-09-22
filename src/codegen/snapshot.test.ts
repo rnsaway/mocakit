@@ -32,7 +32,7 @@ describe('snapshot IO', () => {
       server: 'https://m/service',
       commands: [],
     };
-    await writeFile(path, `﻿${JSON.stringify(snapshot)}`, 'utf8');
+    await writeFile(path, `\uFEFF${JSON.stringify(snapshot)}`, 'utf8');
     expect(await readSnapshot(path)).toEqual(snapshot);
   });
 
@@ -57,6 +57,21 @@ describe('snapshot IO', () => {
         generatedAt: '2026-09-22T00:00:00.000Z',
         server: 'https://m/service',
         commands: [{ name: 'list orders' }],
+      }),
+      'utf8',
+    );
+    await expect(readSnapshot(path)).rejects.toThrow(/not a mocakit snapshot.*list orders/);
+  });
+
+  it('rejects a command with a non-string level, naming the offending command', async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'mocakit-')), 'badlevel.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        mocakitVersion: '0.1.0',
+        generatedAt: '2026-09-22T00:00:00.000Z',
+        server: 'https://m/service',
+        commands: [{ name: 'list orders', level: 5, args: [] }],
       }),
       'utf8',
     );
