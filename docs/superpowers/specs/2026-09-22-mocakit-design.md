@@ -15,7 +15,7 @@
 
 ### Non-goals
 
-- Browser, edge, Bun or Deno support (Node 20+ only).
+- Browser, edge, Bun or Deno support (Node 20.3+ only; `AbortSignal.any` is required).
 - Converting MOCA names to camelCase (argument names and row keys stay exactly as MOCA reports them).
 - Inferring command output shapes by executing commands.
 - A `Result`-type / non-throwing API.
@@ -27,7 +27,7 @@
 |---|---|
 | Package name | `mocakit` |
 | Where generated code lives | In the consuming project, via `mocakit generate`. The package ships runtime + CLI only. |
-| Runtime | Node 20+ only; built-in `fetch` + `undici` `Agent` for TLS-skip and timeouts |
+| Runtime | Node 20.3+ only; `undici` `fetch` + `Agent` for TLS-skip and timeouts |
 | Argument rendering | `where` clause: `list orders where wh_id = 'WMD1' and ordqty = 5` |
 | Raw MOCA | `moca.exec(mocaText, opts)` escape hatch (pipes, `[SQL]`, redirects, etc.) |
 | Output typing | `MocaOutputs` registry via module augmentation, plus a per-call generic override; default `MocaRow` |
@@ -75,7 +75,7 @@ falling back to column position 5), and `locale_id` from row 0 (fallback positio
 </moca-response>
 ```
 
-- `status` is missing or unparseable → `-1`.
+- No `<status>` element, or a non-integer status → `MocaProtocolError` (the body is not a moca-response).
 - Field names come from the metadata column at the same position, then the field's `name` attribute, then `field_N`.
 - Duplicate column names get `_2`, `_3`, … suffixes.
 - A field is NULL when it has `null`/`nil` = `true|1|yes`, or it has no text and no children.
@@ -92,7 +92,8 @@ src/
   protocol/   xml.ts, request.ts, response.ts, convert.ts   pure; no I/O
   transport/  http.ts                                        fetch + undici Agent; returns raw text
   session/    session-manager.ts, store.ts                   login, cache, single-flight, 523 recovery
-  client/     client.ts, render.ts, errors.ts, types.ts      MocaClient, where-clause rendering, error mapping
+  client/     client.ts, render.ts                            MocaClient, where-clause rendering
+  errors.ts, types.ts                                        shared by every layer
   codegen/    introspect.ts, snapshot.ts, names.ts, emit.ts  introspection + TS emission
   dates/      codec.ts                                       formatMocaDate, parseMocaDate, DateCodec (§8a)
   config.ts                                                  defineConfig + config loading
@@ -125,7 +126,7 @@ const moca = createMoca({
   ignoreSslIssues: false,
   timeoutMs: 300_000,
   session: { reuse: true, maxAgeMinutes: 30, store: undefined },
-  defaults: { format: 'rows', convert: true, noRowsIsError: false, autocommit: true },
+  defaults: { convert: true, noRowsIsError: false, autocommit: true },
 });
 
 const orders = await moca.listOrders({ wh_id: 'WMD1', ordnum: 'A1' });
@@ -147,7 +148,7 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
 | `session.reuse` | `boolean` | `true` | Share cached sessions across clients with the same credentials |
 | `session.maxAgeMinutes` | `number` | `30` | `0` = reuse until the server rejects it |
 | `session.store` | `SessionStore?` | in-memory | See §7 |
-| `defaults` | `Partial<CallOptions>` | see below | Client-wide call defaults |
+| `defaults` | `{ convert?, noRowsIsError?, autocommit? }` | see below | Client-wide call defaults. `format` is per call only, so return types stay statically known. |
 
 ### `CallOptions`
 
@@ -284,9 +285,10 @@ changes.
 - Date behavior will later be configured through an optional `dates` object on both `MocaConfig` and
   `CallOptions`, with per-call settings overriding the client. v1 reserves the name `dates` and doesn't define
   it. Future fields are additive and optional, so adding them isn't a breaking change.
-- Internally, rendering and conversion receive a `DateCodec` (`{ format(d: Date): string; parse(s: string): Date }`)
+- Internally, rendering receives a `DateCodec` (`{ format(d: Date): string; parse(s: string): Date }`)
   instead of calling the functions directly. v1 always passes the default codec, so a future version can swap
-  codecs without touching the render or convert code.
+  codecs without touching the render code. Row conversion will also receive the codec once date-column conversion
+  is added; v1 conversion doesn't touch dates.
 - The default response value for date columns (a string) will not change in a minor version. Returning `Date`
   objects will be opt-in (e.g. `dates: { columns: 'date' }`) until a major version.
 
@@ -436,11 +438,11 @@ server.
 ## 12. Packaging
 
 - `package.json`: `"type": "module"`, `exports` for ESM + CJS + types, `bin: { "mocakit": "dist/cli.js" }`,
-  `engines: { node: ">=20" }`.
+  `engines: { node: ">=20.3" }`.
 - Build with `tsup`. TypeScript `strict`.
 - Runtime dependencies: `undici` (for the `Agent`; same major as Node's bundled version). CLI-only dependency:
   `jiti`.
-- Scripts: `build`, `test`, `typecheck`, `lint`, `generate`.
+- Scripts: `build`, `test`, `typecheck`, `generate`. (No linter in v1.)
 
 ## 13. Testing
 
