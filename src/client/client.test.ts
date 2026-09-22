@@ -1,6 +1,14 @@
+import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { baseConfig, fakeMoca, loginOk, mocaXml, type FakeRequest } from '../../test/helpers/fake-moca.js';
-import { MocaArgumentError, MocaAuthError, MocaCommandError, MocaProtocolError, isMocaStatus } from '../errors.js';
+import {
+  MocaArgumentError,
+  MocaAuthError,
+  MocaCommandError,
+  MocaProtocolError,
+  MocaTransportError,
+  isMocaStatus,
+} from '../errors.js';
 import { MemorySessionStore } from '../session/store.js';
 import type { CommandSpec, MocaConfig } from '../types.js';
 import { MocaClient } from './client.js';
@@ -127,7 +135,14 @@ describe('MocaClient login, logout and session', () => {
     const error = (await moca.login().catch((e: unknown) => e)) as MocaAuthError;
     expect(error).toBeInstanceOf(MocaAuthError);
     expect(error.command).toContain(`usr_pswd = '***'`);
+
+    // The raw password is `p'w` (doubled to `p''w` once quoted for MOCA). Assert it is
+    // absent everywhere a careless log/serialize call might surface it.
+    expect(error.message).not.toContain("p''w");
+    expect(error.command).not.toContain("p''w");
     expect(JSON.stringify(error)).not.toContain("p''w");
+    expect(String(error.cause)).not.toContain("p''w");
+    expect(inspect(error, { getters: true })).not.toContain("p''w");
   });
 
   it('login() returns the converted login row and makes the session active', async () => {
@@ -172,5 +187,212 @@ describe('MocaClient login, logout and session', () => {
     await moca.exec('a');
     clock.t = 1_500;
     expect(moca.session.ageMs).toBe(1_500);
+  });
+});
+
+describe('MocaClient shared login error isolation', () => {
+  it('does not leak one concurrent call\'s args onto another when the shared login fails', async () => {
+    const fake = fakeMoca(() => mocaXml(523, {}, 'Invalid user'));
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    const spec: CommandSpec = ['list orders', [['wh_id', 'S', 1]]];
+
+    const [first, second] = (await Promise.all([
+      moca.call(spec, { wh_id: 'A' }).catch((e: unknown) => e),
+      moca.call(spec, { wh_id: 'B' }).catch((e: unknown) => e),
+    ])) as [MocaAuthError, MocaAuthError];
+
+    for (const error of [first, second]) {
+      expect(error).toBeInstanceOf(MocaAuthError);
+      expect(error.args).toBeUndefined();
+      expect(error.command).toMatch(/^login user where usr_id = 'JDOE' and usr_pswd = '\*\*\*'$/);
+    }
+  });
+});
+
+describe('MocaClient protected environment keys', () => {
+  it('rejects an env override of USR_ID before contacting the server', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    const error = (await moca.exec('a', { env: { usr_id: 'HACKED' } }).catch((e: unknown) => e)) as MocaArgumentError;
+    expect(error).toBeInstanceOf(MocaArgumentError);
+    expect(error.message).toBe('USR_ID and SESSION_KEY cannot be overridden per call');
+    expect(requests).toHaveLength(0);
+  });
+
+  it('rejects an env override of SESSION_KEY (case-insensitive) before contacting the server', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    const error = (await moca.exec('a', { env: { Session_Key: 'HACKED' } }).catch((e: unknown) => e)) as MocaArgumentError;
+    expect(error).toBeInstanceOf(MocaArgumentError);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('still allows overriding WH_ID, DEVCOD and LOCALE_ID', async () => {
+    const { moca, requests } = client(() => ORDERS, { warehouse: 'WMD1' });
+    await moca.exec('a', { env: { WH_ID: 'OTHER', DEVCOD: 'DEV1', LOCALE_ID: 'US_ENGLISH' } });
+    expect(requests[1]).toMatchObject({ env: { WH_ID: 'OTHER', DEVCOD: 'DEV1', LOCALE_ID: 'US_ENGLISH' } });
+  });
+});
+
+describe('MocaClient abort handling while waiting for a login', () => {
+  it('rejects promptly when the caller aborts while a login is in flight, without cancelling the login', async () => {
+    let loginSettled = false;
+    const fake = fakeMoca(async (r) => {
+      if (r.query.startsWith('login user')) {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        loginSettled = true;
+        return loginOk();
+      }
+      return ORDERS;
+    });
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 10);
+
+    const started = Date.now();
+    const error = (await moca
+      .exec('list orders', { signal: controller.signal })
+      .catch((e: unknown) => e)) as MocaTransportError;
+    const elapsed = Date.now() - started;
+
+    expect(error).toBeInstanceOf(MocaTransportError);
+    expect(error.message).toMatch(/aborted/);
+    expect(elapsed).toBeLessThan(50);
+    expect(loginSettled).toBe(false);
+
+    // The shared login is still running in the background; let it finish so it doesn't leak
+    // into a later test via the shared session store.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(loginSettled).toBe(true);
+  });
+
+  it('sends no additional request for a call made with an already-aborted signal', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    await moca.exec('warm up the session');
+    const before = requests.length;
+
+    const error = (await moca
+      .exec('a', { signal: AbortSignal.abort() })
+      .catch((e: unknown) => e)) as MocaTransportError;
+
+    expect(error).toBeInstanceOf(MocaTransportError);
+    expect(error.message).toMatch(/aborted/);
+    expect(requests).toHaveLength(before);
+  });
+
+  it('checks the signal before retrying after a 523, instead of always retrying', async () => {
+    const controller = new AbortController();
+    // Abort as the 523 response for the first attempt is produced, so the signal is already
+    // aborted by the time #execute checks it, just before the retry would fire.
+    const fake = fakeMoca((r) => {
+      if (r.query.startsWith('login user')) return loginOk();
+      controller.abort();
+      return mocaXml(523, {}, 'Session expired');
+    });
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    const error = (await moca
+      .exec('list orders', { signal: controller.signal })
+      .catch((e: unknown) => e)) as MocaTransportError;
+    expect(error).toBeInstanceOf(MocaTransportError);
+    expect(error.message).toMatch(/aborted/);
+    // login + first attempt only; no second login triggered by the retry.
+    expect(fake.requests.map((r) => r.query.split(' ')[0])).toEqual(['login', 'list']);
+  });
+});
+
+describe('MocaClient session-expired retry', () => {
+  it('evicts the fresh session before throwing when 523 persists after re-login, so the next call logs in again', async () => {
+    const { moca, requests } = client(() => mocaXml(523));
+    await expect(moca.exec('x')).rejects.toBeInstanceOf(MocaAuthError);
+    await expect(moca.exec('x')).rejects.toBeInstanceOf(MocaAuthError);
+    // Each call re-logs-in from scratch (login, x, login, x) because the previously acquired
+    // session was evicted rather than left cached and stale.
+    expect(requests.map((r) => r.query.split(' ')[0])).toEqual([
+      'login', 'x', 'login', 'x',
+      'login', 'x', 'login', 'x',
+    ]);
+  });
+});
+
+describe('MocaClient constructor validation', () => {
+  it('rejects an empty url', () => {
+    expect(() => new MocaClient({ ...baseConfig, url: '' })).toThrow(MocaArgumentError);
+  });
+
+  it('rejects an empty username', () => {
+    expect(() => new MocaClient({ ...baseConfig, username: '' })).toThrow(MocaArgumentError);
+  });
+
+  it('rejects an empty password', () => {
+    expect(() => new MocaClient({ ...baseConfig, password: '' })).toThrow(MocaArgumentError);
+  });
+
+  it('rejects a non-finite session.maxAgeMinutes', () => {
+    expect(() => new MocaClient({ ...baseConfig, session: { maxAgeMinutes: Number.NaN } })).toThrow(MocaArgumentError);
+    expect(() => new MocaClient({ ...baseConfig, session: { maxAgeMinutes: Number.POSITIVE_INFINITY } })).toThrow(
+      MocaArgumentError,
+    );
+  });
+
+  it('rejects a non-positive or non-finite timeoutMs', () => {
+    expect(() => new MocaClient({ ...baseConfig, timeoutMs: 0 })).toThrow(MocaArgumentError);
+    expect(() => new MocaClient({ ...baseConfig, timeoutMs: -1 })).toThrow(MocaArgumentError);
+    expect(() => new MocaClient({ ...baseConfig, timeoutMs: Number.NaN })).toThrow(MocaArgumentError);
+  });
+});
+
+describe('MocaClient additional environment and result coverage', () => {
+  it('sends DEVCOD when device is set', async () => {
+    const { moca, requests } = client(() => ORDERS, { device: 'DEV42' });
+    await moca.exec('a');
+    expect(requests[1]).toMatchObject({ env: { DEVCOD: 'DEV42' } });
+  });
+
+  it('sends exactly USR_ID (nothing else) in the login request env', async () => {
+    const fake = fakeMoca((r) => (r.query.startsWith('login user') ? loginOk() : ORDERS));
+    await new MocaClient({ ...baseConfig }, { transport: fake.transport }).exec('a');
+    expect(fake.requests[0]!.env).toEqual({ USR_ID: 'JDOE' });
+  });
+
+  it('keeps message and columns for a 510 with format: full', async () => {
+    const { moca } = client(() => mocaXml(510, { columns: [{ name: 'ordnum', type: 'S' }] }, 'No Data Found'));
+    const result = await moca.exec('list orders', { format: 'full' });
+    expect(result).toEqual({
+      status: 510,
+      message: 'No Data Found',
+      columns: [{ name: 'ordnum', type: 'S' }],
+      rows: [],
+    });
+  });
+
+  it('logs in exactly twice for three concurrent calls that all hit a 523, and all succeed', async () => {
+    // Fail each distinct command's first attempt only, so every one of the three concurrent
+    // calls needs exactly one retry -- but since the retries share one single-flight login,
+    // only two logins total should occur (one for the first attempts, one for the retries).
+    const seen = new Set<string>();
+    const fake = fakeMoca((r) => {
+      if (r.query.startsWith('login user')) return loginOk();
+      if (!seen.has(r.query)) {
+        seen.add(r.query);
+        return mocaXml(523, {}, 'Session expired');
+      }
+      return ORDERS;
+    });
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    const results = await Promise.all([moca.exec('list a'), moca.exec('list b'), moca.exec('list c')]);
+    expect(results).toEqual([
+      [{ ordnum: 'A1', ordqty: 5, cancel_flg: false }],
+      [{ ordnum: 'A1', ordqty: 5, cancel_flg: false }],
+      [{ ordnum: 'A1', ordqty: 5, cancel_flg: false }],
+    ]);
+    expect(fake.requests.filter((r) => r.query.startsWith('login user'))).toHaveLength(2);
+  });
+
+  it('logout() still evicts the session when the server returns an error status, and rethrows', async () => {
+    const fake = fakeMoca((r) => (r.query.startsWith('login user') ? loginOk() : mocaXml(1, {}, 'boom')));
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    await moca.exec('a').catch(() => undefined);
+    await expect(moca.logout()).rejects.toBeInstanceOf(MocaCommandError);
+    // The session was still evicted: the next call logs in again.
+    await moca.exec('a').catch(() => undefined);
+    expect(fake.requests.map((r) => r.query.split(' ')[0])).toEqual(['login', 'a', 'logout', 'login', 'a']);
   });
 });

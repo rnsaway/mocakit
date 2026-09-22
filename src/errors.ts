@@ -56,6 +56,18 @@ export class MocaError extends Error {
   set args(value: Readonly<Record<string, unknown>> | undefined) {
     this.#args = value === undefined ? undefined : redactArgs(value);
   }
+
+  /**
+   * `JSON.stringify` (and anything else that calls `toJSON`) otherwise sees none of this
+   * error's own state: `message` is a non-enumerable own property on `Error`, and `command`/
+   * `args` are accessors defined on the prototype, which are non-enumerable by default. That
+   * made past "the password never appears in JSON.stringify" tests pass for the wrong reason
+   * (the fields were entirely absent, not safely redacted). This makes them present, through
+   * the redacting getters, so serialization is actually exercised.
+   */
+  toJSON(): { name: string; message: string; status: number; command: string | undefined; args: Readonly<Record<string, unknown>> | undefined } {
+    return { name: this.name, message: this.message, status: this.status, command: this.command, args: this.args };
+  }
 }
 
 export class MocaCommandError extends MocaError {
@@ -76,6 +88,10 @@ export class MocaCommandError extends MocaError {
     this.serverMessage = serverMessage;
     this.result = result;
   }
+
+  override toJSON(): ReturnType<MocaError['toJSON']> & { serverMessage: string | null } {
+    return { ...super.toJSON(), serverMessage: this.serverMessage };
+  }
 }
 
 export class MocaAuthError extends MocaError {
@@ -90,6 +106,10 @@ export class MocaTransportError extends MocaError {
     super(message, options);
     this.httpStatus = options.httpStatus;
   }
+
+  override toJSON(): ReturnType<MocaError['toJSON']> & { httpStatus: number | undefined } {
+    return { ...super.toJSON(), httpStatus: this.httpStatus };
+  }
 }
 
 export class MocaProtocolError extends MocaError {
@@ -100,6 +120,10 @@ export class MocaProtocolError extends MocaError {
     super(message, options);
     this.rawSnippet = rawSnippet;
   }
+
+  override toJSON(): ReturnType<MocaError['toJSON']> & { rawSnippet: string } {
+    return { ...super.toJSON(), rawSnippet: this.rawSnippet };
+  }
 }
 
 export class MocaArgumentError extends MocaError {
@@ -109,6 +133,10 @@ export class MocaArgumentError extends MocaError {
   constructor(message: string, argument?: string, options: MocaErrorOptions = {}) {
     super(message, options);
     this.argument = argument;
+  }
+
+  override toJSON(): ReturnType<MocaError['toJSON']> & { argument: string | undefined } {
+    return { ...super.toJSON(), argument: this.argument };
   }
 }
 

@@ -1,5 +1,7 @@
+import { MocaTransportError } from '../../src/errors.js';
 import { escapeXmlAttribute, escapeXmlText, findChild, findChildren, parseXml } from '../../src/protocol/xml.js';
 import type { Transport } from '../../src/transport/http.js';
+import { redactUrl } from '../../src/util/url.js';
 
 export interface FakeRequest {
   url: string;
@@ -37,7 +39,12 @@ export function loginOk(key = 'KEY1', locale = 'US_ENGLISH'): string {
 
 export function fakeMoca(handler: (request: FakeRequest) => string | Promise<string>) {
   const requests: FakeRequest[] = [];
-  const transport: Transport = async ({ url, body }) => {
+  const transport: Transport = async ({ url, body, signal }) => {
+    // Mirrors httpTransport's own pre-aborted check: a caller that cancelled before the
+    // request was sent gets no request recorded, real transport or fake.
+    if (signal?.aborted === true) {
+      throw new MocaTransportError(`Request to ${redactUrl(url)} was aborted`, { cause: signal.reason });
+    }
     const root = findChild(parseXml(body), 'moca-request')!;
     const env: Record<string, string> = {};
     for (const v of findChildren(findChild(root, 'environment')!, 'var')) env[v.attributes.name!] = v.attributes.value ?? '';

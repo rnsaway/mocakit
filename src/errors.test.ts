@@ -83,6 +83,13 @@ describe('errors', () => {
     err.args = { usr_pswd: 's', wh_id: 'W' };
     expect(err.args).toEqual({ usr_pswd: '***', wh_id: 'W' });
 
+    // `command`/`args` are prototype accessors, non-enumerable by default, so a plain
+    // `JSON.stringify` would omit them entirely -- passing this assertion for the wrong
+    // reason (absence, not redaction). `toJSON` puts them in the output, redacted, so this
+    // exercises the actual redaction and not just their absence.
+    const json = JSON.parse(JSON.stringify(err)) as { command: string; args: Record<string, unknown> };
+    expect(json.command).toBe("login user where usr_pswd = '***'");
+    expect(json.args).toEqual({ usr_pswd: '***', wh_id: 'W' });
     expect(JSON.stringify(err)).not.toContain('"s"');
     expect(JSON.stringify(err)).not.toContain("'a'");
   });
