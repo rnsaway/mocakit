@@ -1,0 +1,22 @@
+{
+  "mocakitVersion": "0.1.0",
+  "generatedAt": "2026-09-22T00:00:00.000Z",
+  "server": "https://moca.test/service",
+  "commands": [
+    { "name": "create inventory", "level": "dcs", "args": [
+      { "name": "prtnum", "dtype": "S", "required": false },
+      { "name": "untqty", "dtype": "I", "required": false }
+    ] },
+    { "name": "exec", "level": "base", "args": [] },
+    { "name": "list active commands", "level": "mcsbase", "description": "Lists */ active commands", "args": [] },
+    { "name": "list orders", "level": "wmd", "description": "Lists orders", "args": [
+      { "name": "ordnum", "dtype": "S", "required": false, "description": "Order number" },
+      { "name": "wh_id", "dtype": "S", "required": true, "description": "Warehouse" },
+      { "name": "ordqty", "dtype": "I", "required": false },
+      { "name": "adddte", "dtype": "D", "required": false },
+      { "name": "cancel_flg", "dtype": "O", "required": false },
+      { "name": "odd-name", "dtype": "S", "required": false }
+    ] },
+    { "name": "list-orders", "level": "USRint", "args": [] }
+  ]
+}
