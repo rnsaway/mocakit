@@ -102,7 +102,7 @@ src/
 
 Each unit has one job and can be tested in isolation:
 
-- **protocol**: `buildRequest(query, env, autocommit) → string`, `parseResponse(xml) → RawResult`
+- **protocol**: `buildRequest(query, env, autocommit = true) → string`, `parseResponse(xml) → RawResult`
   (`{ status, message, columns, rows }` with string/null/nested values), `convertRow(columns, row)`.
 - **transport**: `send(body, { url, timeoutMs, ignoreSslIssues }) → Promise<string>`. Throws `MocaTransportError`
   on network/TLS/timeout, non-2xx HTTP status, or empty body. Swappable in tests via the `Transport` interface.
