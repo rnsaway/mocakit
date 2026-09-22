@@ -224,7 +224,8 @@ Rules:
 - **523 recovery:** on status 523 the session manager evicts the key, logs in again (single-flight), and retries
   the command exactly once. A second 523 throws `MocaAuthError`.
 - **Environment:** every request sends `USR_ID`, `SESSION_KEY`, and `WH_ID`/`DEVCOD`/`LOCALE_ID` when set
-  (`LOCALE_ID` falls back to the login locale). `opts.env` merges on top.
+  (`LOCALE_ID` falls back to the login locale). `opts.env` merges on top, except that `USR_ID` and `SESSION_KEY` cannot be
+  overridden (`MocaArgumentError`).
 
 ## 8. Response format
 
@@ -474,5 +475,7 @@ around them:
 2. Whether `list active command arguments` works unfiltered.
 3. The dtype and column-type code sets (for the mapping tables in §8 and §11).
 4. Whether MOCA ever sends an empty `<field></field>` for an empty string (mocakit currently reads it as NULL).
+5. That a 523 always means the command did not execute, including when a command makes nested `remote(...)` calls
+   (the single post-523 retry relies on this).
 
 (`logout user` is confirmed to exist.)
