@@ -31,4 +31,20 @@ describe('parseMocaDate', () => {
   it('exposes both through the default codec', () => {
     expect(defaultDateCodec.format(defaultDateCodec.parse('20260101120000'))).toBe('20260101120000');
   });
+
+  it('rejects input with leading whitespace instead of trimming it', () => {
+    expect(() => parseMocaDate(' 20260101120000')).toThrow(RangeError);
+  });
+
+  it('round-trips a year below 100 without the two-digit-year pitfall', () => {
+    const date = parseMocaDate('00500315120000');
+    expect(formatMocaDate(date)).toBe('00500315120000');
+  });
+});
+
+describe('formatMocaDate year range', () => {
+  it('rejects years outside 0-9999', () => {
+    expect(() => formatMocaDate(new Date(10000, 0, 1))).toThrow(RangeError);
+    expect(() => formatMocaDate(new Date(-5, 0, 1))).toThrow(RangeError);
+  });
 });

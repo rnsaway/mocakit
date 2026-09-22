@@ -60,4 +60,47 @@ describe('toRows', () => {
   it('keeps an empty numeric string as-is', () => {
     expect(toRows({ columns: [{ name: 'n', type: 'I' }], rows: [{ n: '' }] }, true)).toEqual([{ n: '' }]);
   });
+
+  it('looks up type by deduplicated column name, not row-key position', () => {
+    const result = toRows(
+      {
+        columns: [
+          { name: 'txt', type: 'S' },
+          { name: '1', type: 'I' },
+        ],
+        rows: [{ txt: '007', '1': '5' }],
+      },
+      true,
+    );
+    expect(result).toEqual([{ txt: '007', '1': 5 }]);
+  });
+
+  it('keeps an integer that is not a safe integer as a string', () => {
+    expect(toRows({ columns: [{ name: 'n', type: 'I' }], rows: [{ n: '9007199254740993' }] }, true)).toEqual([
+      { n: '9007199254740993' },
+    ]);
+  });
+
+  it('only converts strictly-numeric text', () => {
+    const columns = [{ name: 'n', type: 'I' }];
+    expect(toRows({ columns, rows: [{ n: '0x1F' }] }, true)).toEqual([{ n: '0x1F' }]);
+    expect(toRows({ columns, rows: [{ n: 'Infinity' }] }, true)).toEqual([{ n: 'Infinity' }]);
+    expect(toRows({ columns, rows: [{ n: 'abc' }] }, true)).toEqual([{ n: 'abc' }]);
+    expect(toRows({ columns, rows: [{ n: '1e3' }] }, true)).toEqual([{ n: 1000 }]);
+    expect(toRows({ columns, rows: [{ n: '-2.5' }] }, true)).toEqual([{ n: -2.5 }]);
+  });
+
+  it('keeps a __proto__ column as an own property', () => {
+    const result = toRows(
+      { columns: [{ name: '__proto__', type: 'S' }], rows: [{ ['__proto__']: 'x' }] },
+      true,
+    );
+    expect(Object.getOwnPropertyDescriptor(result[0], '__proto__')).toEqual({
+      value: 'x',
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    expect(Object.getPrototypeOf(result[0] as object)).toBe(Object.prototype);
+  });
 });

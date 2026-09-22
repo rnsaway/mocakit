@@ -34,7 +34,43 @@ function parseColumns(metadata: XmlNode | undefined): MocaColumn[] {
 function isNullField(field: XmlNode): boolean {
   const flag = (field.attributes.null ?? field.attributes.nil ?? '').toLowerCase();
   if (flag === 'true' || flag === '1' || flag === 'yes') return true;
+  // An empty field (no text, no children, including empty CDATA) means NULL by design.
   return !field.hasText && field.children.length === 0;
+}
+
+/**
+ * Deduplicates a list of names by suffixing collisions `_2`, `_3`, ... upward until an
+ * unused key is found. Pure: never mutates its input, and a name that was never a
+ * collision target is returned unchanged.
+ */
+export function uniqueKeys(names: string[]): string[] {
+  const used = new Set<string>();
+  const keys = names.map((name) => {
+    let key = name;
+    if (used.has(key)) {
+      let suffix = 2;
+      while (used.has(`${name}_${suffix}`)) suffix += 1;
+      key = `${name}_${suffix}`;
+    }
+    used.add(key);
+    return key;
+  });
+  return keys;
+}
+
+/**
+ * Assigns `value` at `key` on `row`. A plain `row[key] = value` is unsafe when `key` is
+ * `'__proto__'`: bracket assignment with that literal key invokes `Object.prototype`'s
+ * `__proto__` setter instead of creating an own property, silently dropping the value
+ * (the setter no-ops for non-object, non-null values). `Object.defineProperty` bypasses
+ * the setter and creates a real own, enumerable property.
+ */
+function setRowValue(row: RawRow, key: string, value: RawValue): void {
+  if (key === '__proto__') {
+    Object.defineProperty(row, key, { value, enumerable: true, writable: true, configurable: true });
+  } else {
+    row[key] = value;
+  }
 }
 
 function parseResults(results: XmlNode | undefined): RawResultSet {
@@ -44,15 +80,18 @@ function parseResults(results: XmlNode | undefined): RawResultSet {
   const rowNodes = data === undefined ? [] : findChildren(data, 'row');
 
   const rows = rowNodes.map((rowNode) => {
+    const fields = findChildren(rowNode, 'field');
+    const names = fields.map(
+      (field, position) => columns[position]?.name || field.attributes.name || `field_${position + 1}`,
+    );
+    const keys = uniqueKeys(names);
+
     const row: RawRow = {};
-    const timesSeen = new Map<string, number>();
-    findChildren(rowNode, 'field').forEach((field, position) => {
-      const name = columns[position]?.name || field.attributes.name || `field_${position + 1}`;
-      const occurrence = (timesSeen.get(name) ?? 0) + 1;
-      timesSeen.set(name, occurrence);
-      const key = occurrence === 1 ? name : `${name}_${occurrence}`;
+    fields.forEach((field, position) => {
+      const key = keys[position] as string;
       const nested = findChild(field, 'moca-results');
-      row[key] = nested !== undefined ? parseResults(nested) : isNullField(field) ? null : field.text;
+      const value = nested !== undefined ? parseResults(nested) : isNullField(field) ? null : field.text;
+      setRowValue(row, key, value);
     });
     return row;
   });
