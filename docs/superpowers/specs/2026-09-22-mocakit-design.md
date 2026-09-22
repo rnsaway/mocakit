@@ -187,19 +187,22 @@ Rules:
 2. A required argument that is missing, `undefined` or `null` throws `MocaArgumentError` before any request.
    (TypeScript also catches missing required args at compile time.)
 3. Strings are single-quoted, and embedded `'` becomes `''`.
-4. Numbers are rendered unquoted. `NaN`/`Infinity` throws `MocaArgumentError`.
+4. Numbers are rendered unquoted. `NaN`/`Infinity`, integers beyond `Number.MAX_SAFE_INTEGER`, and values whose
+   JS string form needs exponent notation (e.g. `1e21`, `1e-7`) throw `MocaArgumentError`; pass those as strings.
 5. Booleans are rendered as `1` / `0`.
 6. `Date` values are rendered as a quoted 14-digit string in the Oracle-style format `YYYYMMDDHH24MISS` (24-hour
    clock), using the local time zone: `new Date(2026, 8, 22, 14, 5, 9)` → `'20260922140509'`. An invalid `Date`
    throws `MocaArgumentError`. Formatting goes through the dates module (§8a).
 7. Order: declared arguments in spec order, then `extraArgs` in insertion order.
 8. A command with no args, or whose args were all removed, renders as the bare command name.
-9. Argument names are validated as `/^[A-Za-z_][A-Za-z0-9_]*$/`. Anything else throws `MocaArgumentError`, which
+9. Duplicate and unknown argument names are detected case-insensitively (MOCA names are case-insensitive).
+10. Argument names are validated as `/^[A-Za-z_][A-Za-z0-9_]*$/`. Anything else throws `MocaArgumentError`, which
     blocks injection through `extraArgs` keys.
 
 ## 7. Session caching
 
-- **Cache key:** `sha256(url + '\n' + username + '\n' + password)`.
+- **Cache key:** `sha256(JSON.stringify([url, username, password]))`. It is unsalted, so persistent stores must
+  protect their keys.
 - **Default store:** a module-level `Map` shared by every client in the process. `session.reuse: false` gives a
   client a private, uncached session that lives only as long as the client.
 - **`SessionStore` interface** (pluggable, e.g. file- or Redis-backed; only the in-memory store ships):
