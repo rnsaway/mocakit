@@ -1,6 +1,6 @@
 import type { MocaRow, MocaValue } from '../types.js';
 import { classifyMocaType } from './moca-types.js';
-import { uniqueKeys, type RawResultSet, type RawValue } from './response.js';
+import { columnKeys, setRowValue, type RawResultSet, type RawValue } from './response.js';
 
 // Whole/decimal number, optional sign, optional exponent — no hex, no Infinity/NaN, no stray text.
 const NUMERIC_PATTERN = /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/;
@@ -34,21 +34,9 @@ function convertValue(value: RawValue, type: string | undefined, convert: boolea
   return convert ? convertText(value, type) : value;
 }
 
-/**
- * Assigns `value` at `key` on `row`. See the identical helper in response.ts: plain
- * `row[key] = value` silently drops the value when `key` is `'__proto__'`.
- */
-function setRowValue(row: MocaRow, key: string, value: MocaValue): void {
-  if (key === '__proto__') {
-    Object.defineProperty(row, key, { value, enumerable: true, writable: true, configurable: true });
-  } else {
-    row[key] = value;
-  }
-}
-
 /** Converts a raw result set to plain row objects. Column types are matched by (deduplicated) column name. */
 export function toRows(set: RawResultSet, convert: boolean): MocaRow[] {
-  const keys = uniqueKeys(set.columns.map((column) => column.name));
+  const keys = columnKeys(set.columns);
   const typeByKey = new Map<string, string | undefined>();
   keys.forEach((key, index) => typeByKey.set(key, set.columns[index]?.type));
 

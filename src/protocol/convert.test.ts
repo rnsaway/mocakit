@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { toRows } from './convert.js';
 import { classifyMocaType } from './moca-types.js';
+import { parseResponse } from './response.js';
+
+const wrap = (inner: string) => `<?xml version="1.0"?><moca-response>${inner}</moca-response>`;
 
 describe('classifyMocaType', () => {
   it('classifies codes case-insensitively and falls back to string', () => {
@@ -102,5 +105,16 @@ describe('toRows', () => {
       configurable: true,
     });
     expect(Object.getPrototypeOf(result[0] as object)).toBe(Object.prototype);
+  });
+
+  it('derives type-lookup keys the same way parseResults derives row keys, end to end', () => {
+    const response = parseResponse(
+      wrap(
+        '<status>0</status><moca-results><metadata>' +
+          '<column name="" type="S"/><column name="field_1" type="I"/>' +
+          '</metadata><data><row><field>007</field><field>5</field></row></data></moca-results>',
+      ),
+    );
+    expect(toRows(response, true)).toEqual([{ field_1: '007', field_1_2: 5 }]);
   });
 });

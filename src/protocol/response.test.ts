@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MocaProtocolError } from '../errors.js';
-import { parseResponse, uniqueKeys } from './response.js';
+import { columnKeys, parseResponse, uniqueKeys } from './response.js';
 
 const wrap = (inner: string) => `<?xml version="1.0"?><moca-response>${inner}</moca-response>`;
 
@@ -145,5 +145,23 @@ describe('uniqueKeys', () => {
 
   it('is a pure function that leaves unrelated names untouched', () => {
     expect(uniqueKeys(['x', 'y', 'z'])).toEqual(['x', 'y', 'z']);
+  });
+
+  it('reserves every original name before handing out suffixes, so a real column keeps its own name', () => {
+    expect(uniqueKeys(['a', 'a', 'a_2'])).toEqual(['a', 'a_3', 'a_2']);
+  });
+});
+
+describe('columnKeys', () => {
+  it('derives the same names as uniqueKeys over (name || positional fallback)', () => {
+    expect(columnKeys([{ name: 'ordnum' }, { name: '' }, { name: 'ordnum' }])).toEqual([
+      'ordnum',
+      'field_2',
+      'ordnum_2',
+    ]);
+  });
+
+  it('falls back to a positional name for an empty column name', () => {
+    expect(columnKeys([{ name: '' }, { name: 'field_1' }])).toEqual(['field_1', 'field_1_2']);
   });
 });

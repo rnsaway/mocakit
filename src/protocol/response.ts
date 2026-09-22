@@ -40,22 +40,39 @@ function isNullField(field: XmlNode): boolean {
 
 /**
  * Deduplicates a list of names by suffixing collisions `_2`, `_3`, ... upward until an
- * unused key is found. Pure: never mutates its input, and a name that was never a
- * collision target is returned unchanged.
+ * unused key is found. Every original name is reserved up front, so a generated suffix
+ * never steals a name that a real (later) entry owns; that later entry still gets its
+ * own name when its turn comes. Pure: never mutates its input, and a name that was never
+ * a collision target is returned unchanged.
  */
 export function uniqueKeys(names: string[]): string[] {
+  const reserved = new Set(names);
   const used = new Set<string>();
-  const keys = names.map((name) => {
+  return names.map((name) => {
     let key = name;
     if (used.has(key)) {
       let suffix = 2;
-      while (used.has(`${name}_${suffix}`)) suffix += 1;
-      key = `${name}_${suffix}`;
+      let candidate = `${name}_${suffix}`;
+      while (used.has(candidate) || reserved.has(candidate)) {
+        suffix += 1;
+        candidate = `${name}_${suffix}`;
+      }
+      key = candidate;
     }
     used.add(key);
     return key;
   });
-  return keys;
+}
+
+/**
+ * Deduplicated key for each column, in metadata order: the column's own name, or a
+ * positional `field_N` fallback when it has none, run through `uniqueKeys`. This is the
+ * same rule `parseResults` applies per row field (column name || field name attribute ||
+ * positional fallback), so the two stay in lockstep whenever a field carries no `name`
+ * attribute of its own (the normal case).
+ */
+export function columnKeys(columns: MocaColumn[]): string[] {
+  return uniqueKeys(columns.map((column, index) => column.name || `field_${index + 1}`));
 }
 
 /**
@@ -63,9 +80,10 @@ export function uniqueKeys(names: string[]): string[] {
  * `'__proto__'`: bracket assignment with that literal key invokes `Object.prototype`'s
  * `__proto__` setter instead of creating an own property, silently dropping the value
  * (the setter no-ops for non-object, non-null values). `Object.defineProperty` bypasses
- * the setter and creates a real own, enumerable property.
+ * the setter and creates a real own, enumerable property. Generic so both `RawRow`
+ * (this module) and `MocaRow` (convert.ts) can share one implementation.
  */
-function setRowValue(row: RawRow, key: string, value: RawValue): void {
+export function setRowValue<V>(row: Record<string, V>, key: string, value: V): void {
   if (key === '__proto__') {
     Object.defineProperty(row, key, { value, enumerable: true, writable: true, configurable: true });
   } else {
