@@ -3,6 +3,15 @@
   "generatedAt": "2026-09-22T00:00:00.000Z",
   "server": "https://moca.test/service",
   "commands": [
+    { "name": "assign dock door", "level": "wmd", "args": [
+      { "name": "@door_id", "dtype": "STRING", "required": true, "description": "Door" },
+      { "name": "door_id", "dtype": "STRING", "required": false },
+      { "name": "rush_flg", "dtype": "FLAG", "required": false },
+      { "name": "priority", "dtype": "UNKNOWN", "required": false }
+    ] },
+    { "name": "consume widget pointer", "level": "wmd", "args": [
+      { "name": "@widget_ptr", "dtype": "POINTER", "required": true }
+    ] },
     { "name": "create inventory", "level": "dcs", "args": [
       { "name": "prtnum", "dtype": "S", "required": false },
       { "name": "untqty", "dtype": "I", "required": false }
@@ -17,6 +26,16 @@
       { "name": "cancel_flg", "dtype": "O", "required": false },
       { "name": "odd-name", "dtype": "S", "required": false }
     ] },
-    { "name": "list-orders", "level": "USRint", "args": [] }
+    { "name": "list-orders", "level": "USRint", "args": [] },
+    { "name": "process widgets", "level": "wmd", "description": "Processes widgets", "args": [
+      { "name": "widget_id", "dtype": "STRING", "required": true },
+      { "name": "@*", "dtype": "UNKNOWN", "required": false },
+      { "name": "@+widget.*", "dtype": "STRING", "required": false }
+    ] },
+    { "name": "summarize widgets", "level": "wmd", "args": [
+      { "name": "result_set", "dtype": "RESULTS", "required": false },
+      { "name": "widget_id", "dtype": "STRING", "required": false },
+      { "name": "blob", "dtype": "BINARY", "required": false }
+    ] }
   ]
 }

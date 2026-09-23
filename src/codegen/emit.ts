@@ -36,6 +36,8 @@ function tsType(dtype: string): string {
       return 'boolean';
     case 'date':
       return 'string | Date';
+    case 'any':
+      return 'string | number | boolean | Date';
     default:
       return 'string';
   }
@@ -45,26 +47,98 @@ function propertyName(name: string): string {
   return isIdentifier(name) && name !== '__proto__' ? name : str(name);
 }
 
+/** A command as emitted: arguments renamed, filtered and de-duplicated, plus what was set aside. */
+interface EmitCommand extends SnapshotCommand {
+  /** The server listed a wildcard argument (`@*`, `*`, `x.*`): extra arguments pass through. */
+  passThrough: boolean;
+  /** Optional arguments that can only be passed on the MOCA stack, as `name (DTYPE)`. */
+  stackOnly: string[];
+}
+
+/** Strips one leading `@+` or `@`: the server writes `@name` for "argument `name`, read from the stack". */
+function bareArgName(name: string): string {
+  return name.replace(/^@\+?/, '');
+}
+
+/** `@*`, `*`, `@+*`, `foo.*`, `@+invdtl.*`: "pass through whatever stack/where arguments are present". */
+function isWildcardArg(name: string): boolean {
+  const bare = bareArgName(name);
+  return bare === '*' || bare.endsWith('.*');
+}
+
+type ArgsOutcome = { skip: string } | { args: SnapshotArg[]; passThrough: boolean; stackOnly: string[]; warnings: string[] };
+
+/** Applies the argument rules of spec §11 to one command's raw server arguments. */
+function normalizeArgs(command: SnapshotCommand): ArgsOutcome {
+  const badRequired = command.args.find(
+    (arg) => arg.required && !isWildcardArg(arg.name) && !isMocaArgName(bareArgName(arg.name)),
+  );
+  if (badRequired !== undefined) {
+    return {
+      skip: `Command ${str(command.name)} requires argument ${str(badRequired.name)}, which is not a valid MOCA argument name; skipped the command`,
+    };
+  }
+
+  const warnings: string[] = [];
+  const seen = new Map<string, string>();
+  const args: SnapshotArg[] = [];
+  const stackOnly: string[] = [];
+  let passThrough = false;
+  for (const arg of command.args) {
+    if (isWildcardArg(arg.name)) {
+      passThrough = true;
+      continue;
+    }
+    const name = bareArgName(arg.name);
+    if (!isMocaArgName(name)) {
+      warnings.push(`Command ${str(command.name)} argument ${str(arg.name)} is not a valid MOCA argument name; dropped the argument`);
+      continue;
+    }
+    const key = name.toLowerCase();
+    const firstRaw = seen.get(key);
+    if (firstRaw !== undefined) {
+      // `wh_id` next to `@wh_id` is the same argument listed both ways; only a repeat of the same
+      // spelling (ignoring case) is worth a warning.
+      if (firstRaw.toLowerCase() === arg.name.toLowerCase()) {
+        warnings.push(`Command ${str(command.name)} lists argument ${str(arg.name)} more than once; kept the first`);
+      }
+      continue;
+    }
+    seen.set(key, arg.name);
+    if (classifyMocaType(arg.dtype) === 'stack') {
+      if (arg.required) {
+        return {
+          skip: `Command ${str(command.name)} requires stack argument ${str(name)} (${arg.dtype}); skipped (run it with exec())`,
+        };
+      }
+      stackOnly.push(`${name} (${doc(arg.dtype)})`);
+      continue;
+    }
+    args.push(name === arg.name ? arg : { ...arg, name });
+  }
+  return { args, passThrough, stackOnly, warnings };
+}
+
 /**
  * Drops repeated commands (same name ignoring case and whitespace runs), keeping the one whose name
- * sorts lowest, and repeated argument names (ignoring case), keeping the first. Argument names that
- * `renderCommand` would reject (not `[A-Za-z_][A-Za-z0-9_]*`) are dropped when optional; a command
- * with such a *required* argument could never be called, so it is skipped entirely. Returns the
- * commands sorted by name, so the output does not depend on input order.
+ * sorts lowest, and applies the argument rules of `normalizeArgs`: a leading `@`/`@+` is stripped;
+ * wildcard arguments are removed and mark the command as pass-through; optional stack-typed
+ * arguments are set aside; repeated names (ignoring case) keep the first; names `renderCommand`
+ * would reject (not `[A-Za-z_][A-Za-z0-9_]*`) are dropped when optional. A command with an invalid
+ * or stack-typed *required* argument could never be called this way, so it is skipped entirely.
+ * Returns the commands sorted by name, so the output does not depend on input order.
  */
-function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: SnapshotCommand[]; warnings: string[] } {
+function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: EmitCommand[]; warnings: string[] } {
   const warnings: string[] = [];
   const sorted = [...commands].sort(
     (a, b) => byCodeUnit(a.name, b.name) || byCodeUnit(JSON.stringify(a), JSON.stringify(b)),
   );
   const kept = new Map<string, SnapshotCommand>();
-  const result: SnapshotCommand[] = [];
+  const result: EmitCommand[] = [];
   for (const command of sorted) {
-    const badRequired = command.args.find((arg) => arg.required && !isMocaArgName(arg.name));
-    if (badRequired !== undefined) {
-      warnings.push(
-        `Command ${str(command.name)} requires argument ${str(badRequired.name)}, which is not a valid MOCA argument name; skipped the command`,
-      );
+    const outcome = normalizeArgs(command);
+    if ('skip' in outcome) {
+      warnings.push(outcome.skip);
       continue;
     }
 
@@ -75,23 +149,8 @@ function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: Sn
       continue;
     }
     kept.set(key, command);
-
-    const seenArgs = new Set<string>();
-    const args: SnapshotArg[] = [];
-    for (const arg of command.args) {
-      if (!isMocaArgName(arg.name)) {
-        warnings.push(`Command ${str(command.name)} argument ${str(arg.name)} is not a valid MOCA argument name; dropped the argument`);
-        continue;
-      }
-      const argKey = arg.name.toLowerCase();
-      if (seenArgs.has(argKey)) {
-        warnings.push(`Command ${str(command.name)} lists argument ${str(arg.name)} more than once; kept the first`);
-        continue;
-      }
-      seenArgs.add(argKey);
-      args.push(arg);
-    }
-    result.push(args.length === command.args.length ? command : { ...command, args });
+    warnings.push(...outcome.warnings);
+    result.push({ ...command, args: outcome.args, passThrough: outcome.passThrough, stackOnly: outcome.stackOnly });
   }
   return { commands: result, warnings };
 }
@@ -113,15 +172,19 @@ function emitSpec(method: string, command: SnapshotCommand): string {
   return `  ${method}: [${str(command.name)}, [${args}]],`;
 }
 
-function emitMember(method: string, argsType: string, command: SnapshotCommand): string[] {
+function emitMember(method: string, argsType: string, command: EmitCommand): string[] {
   const hasRequired = command.args.some((arg) => arg.required);
   const summary = doc(
     [`\`${command.name.replace(/`/g, "'")}\``, command.level ? `level: ${command.level}` : '', command.description ?? '']
       .filter(Boolean)
       .join(' · '),
   );
+  const notes: string[] = [];
+  if (command.passThrough) notes.push('Accepts additional arguments (@*): pass them via opts.extraArgs.');
+  if (command.stackOnly.length > 0) notes.push(`Stack-only arguments not settable here: ${command.stackOnly.join(', ')}`);
   const callable = hasRequired ? 'mk.Command' : 'mk.OptionalArgsCommand';
-  return [`  /** ${summary} */`, `  ${method}: ${callable}<${argsType}, ${str(command.name)}>;`];
+  const jsdoc = notes.length === 0 ? [`  /** ${summary} */`] : ['  /**', ...[summary, ...notes].map((line) => `   * ${line}`), '   */'];
+  return [...jsdoc, `  ${method}: ${callable}<${argsType}, ${str(command.name)}>;`];
 }
 
 export function emit(snapshot: Snapshot, options: EmitOptions): EmitResult {

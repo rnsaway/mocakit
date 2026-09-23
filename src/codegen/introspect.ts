@@ -5,7 +5,17 @@ import { redactUrl } from '../util/url.js';
 import { byCodeUnit, commandKey, isValidCommandName } from './names.js';
 import type { Snapshot, SnapshotArg, SnapshotCommand } from './snapshot.js';
 
-// Candidate column names, first match wins (case-insensitive); to be confirmed against a live server.
+// Candidate column names, first match wins (case-insensitive). Confirmed against a live server:
+// - `list active commands` returns cmplvl, cmplvlseq, command, cmdtyp, type, syntax, class, functn,
+//   security, trnstyp, filename, desc, api_level. We read command, cmplvl, type (e.g. "Local Syntax",
+//   "Java Method") and desc.
+// - `list active command arguments` returns cmplvl, command, argnam, altnam, argtyp, fixval, argidx,
+//   argreq. argreq is an `O` (boolean) column. The unfiltered call works; the per-command fallback
+//   below is for servers where it does not. argtyp is one of STRING, INTEGER, FLOAT, FLAG, UNKNOWN,
+//   POINTER, RESULTS, OBJECT, BINARY (see moca-types.ts).
+// The other candidates are kept for older or customised servers.
+// argnam is stored raw: it may be `@*`, `*`, `x.*` (pass-through wildcards) or `@name` (the argument
+// `name`, read from the stack). emit() interprets those; the snapshot keeps what the server said.
 const COMMAND_COLUMNS = {
   name: ['command', 'cmd_nam', 'cmdnam', 'command_name', 'name'],
   level: ['cmplvl', 'cmp_lvl', 'level', 'component_level', 'lvl'],

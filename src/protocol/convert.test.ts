@@ -14,6 +14,33 @@ describe('classifyMocaType', () => {
     expect(['D', 'DATETIME'].map(classifyMocaType)).toEqual(['date', 'date']);
     expect(['S', 'Z', undefined].map(classifyMocaType)).toEqual(['string', 'string', 'string']);
   });
+
+  it('classifies every argtyp a live server reports', () => {
+    const argtyps = ['STRING', 'INTEGER', 'FLOAT', 'FLAG', 'UNKNOWN', 'POINTER', 'RESULTS', 'OBJECT', 'BINARY'];
+    expect(argtyps.map(classifyMocaType)).toEqual([
+      'string',
+      'number',
+      'number',
+      'boolean',
+      'any',
+      'stack',
+      'stack',
+      'stack',
+      'stack',
+    ]);
+    expect(['flag', ' unknown ', 'results'].map(classifyMocaType)).toEqual(['boolean', 'any', 'stack']);
+  });
+
+  it('keeps classifying single-letter result-column codes as before', () => {
+    expect(['S', 'I', 'F', 'O', 'D', 'R'].map(classifyMocaType)).toEqual([
+      'string',
+      'number',
+      'number',
+      'boolean',
+      'date',
+      'string',
+    ]);
+  });
 });
 
 describe('toRows', () => {

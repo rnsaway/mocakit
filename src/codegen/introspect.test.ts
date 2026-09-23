@@ -45,6 +45,46 @@ describe('introspect', () => {
     expect(requests.some((r) => r.query.includes("bad''name"))).toBe(false);
   });
 
+  it('reads the column layout a live server returns and keeps argument names raw', async () => {
+    const liveCommands = mocaXml(0, {
+      columns: ['cmplvl', 'cmplvlseq', 'command', 'cmdtyp', 'type', 'syntax', 'class', 'functn', 'security', 'trnstyp', 'filename', 'desc', 'api_level'].map(
+        (name) => ({ name }),
+      ),
+      rows: [['wmd', '10', 'route widgets', 'L', 'Local Syntax', 'x', null, null, null, null, null, 'Routes widgets', '1']],
+    });
+    const liveArgs = mocaXml(0, {
+      columns: [
+        { name: 'cmplvl' },
+        { name: 'command' },
+        { name: 'argnam' },
+        { name: 'altnam' },
+        { name: 'argtyp' },
+        { name: 'fixval' },
+        { name: 'argidx', type: 'I' },
+        { name: 'argreq', type: 'O' },
+      ],
+      rows: [
+        ['wmd', 'route widgets', '@wh_id', null, 'STRING', null, '1', '1'],
+        ['wmd', 'route widgets', '@*', null, 'UNKNOWN', null, '2', '0'],
+        ['wmd', 'route widgets', 'res', null, 'RESULTS', null, '3', '0'],
+      ],
+    });
+    const { promise } = run((r) => (r.query === 'list active commands' ? liveCommands : liveArgs));
+    expect((await promise).commands).toEqual([
+      {
+        name: 'route widgets',
+        level: 'wmd',
+        type: 'Local Syntax',
+        description: 'Routes widgets',
+        args: [
+          { name: '@wh_id', dtype: 'STRING', required: true },
+          { name: '@*', dtype: 'UNKNOWN', required: false },
+          { name: 'res', dtype: 'RESULTS', required: false },
+        ],
+      },
+    ]);
+  });
+
   it('returns no warnings for a clean server', async () => {
     const { result } = run((r) => (r.query === 'list active commands' ? COMMANDS : ARGS));
     expect((await result).warnings).toEqual([]);

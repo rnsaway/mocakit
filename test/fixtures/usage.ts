@@ -46,6 +46,25 @@ export async function check(): Promise<void> {
   // @ts-expect-error required args cannot be null
   await moca.listOrders({ wh_id: null });
 
-  const args: ListOrdersArgs = { wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null };
+  // FLAG is boolean, UNKNOWN takes any scalar, `@door_id` is plain `door_id`.
+  await moca.assignDockDoor({ door_id: 'D1', rush_flg: true, priority: 5 });
+  await moca.assignDockDoor({ door_id: 'D1', priority: 'high' });
+  await moca.assignDockDoor({ door_id: 'D1', priority: new Date() });
+  // @ts-expect-error FLAG only accepts boolean
+  await moca.assignDockDoor({ door_id: 'D1', rush_flg: 'Y' });
+  // @ts-expect-error @-names are exposed without the @
+  await moca.assignDockDoor({ '@door_id': 'D1' });
+
+  // Pass-through (@*) commands take extra arguments via opts.extraArgs.
+  await moca.processWidgets({ widget_id: 'W1' }, { extraArgs: { lotnum: 'L1' } });
+
+  // Optional stack-only arguments are not on the interface.
+  await moca.summarizeWidgets({ widget_id: 'W1' });
+  // @ts-expect-error result_set is RESULTS-typed and stack-only
+  await moca.summarizeWidgets({ result_set: 'x' });
+  // @ts-expect-error a command with a required POINTER argument is not generated
+  await moca.consumeWidgetPointer();
+
+  const args: ListOrdersArgs ={ wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null };
   void [qty, status, fullRows, x, eitherUnknown, firstRow, bad, args];
 }

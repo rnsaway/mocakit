@@ -32,8 +32,9 @@ describe('runGenerate', () => {
     await runGenerate({ fromSnapshot: fixture, out: 'gen/moca.ts', dryRun: false, cwd: dir, env: {}, io: cliIo });
     const code = await readFile(join(dir, 'gen/moca.ts'), 'utf8');
     expect(code).toContain('export class Moca extends mk.MocaClient');
-    expect(out.at(-1)).toBe(`Wrote 5 commands to ${join(dir, 'gen/moca.ts')}`);
+    expect(out.at(-1)).toBe(`Wrote 8 commands to ${join(dir, 'gen/moca.ts')}`);
     expect(err).toEqual([
+      'warning: Command "consume widget pointer" requires stack argument "widget_ptr" (POINTER); skipped (run it with exec())',
       'warning: Command "list orders" argument "odd-name" is not a valid MOCA argument name; dropped the argument',
       'warning: Commands "list orders", "list-orders" map to the same method name; generated listOrders, listOrders_2',
     ]);
@@ -76,7 +77,7 @@ describe('runGenerate', () => {
     const { io: cliIo, out } = io();
     await runGenerate({ fromSnapshot: fixture, out: 'gen/moca.ts', dryRun: true, cwd: dir, env: {}, io: cliIo });
     await expect(readFile(join(dir, 'gen/moca.ts'), 'utf8')).rejects.toThrow();
-    expect(out.at(-1)).toMatch(/^Would write 5 commands/);
+    expect(out.at(-1)).toMatch(/^Would write 8 commands/);
   });
 
   it('resolves a config-relative out against the config file directory, not the cwd', async () => {
@@ -199,8 +200,39 @@ describe('runGenerate', () => {
     await writeFile(snapshotFile, JSON.stringify(snapshot));
     const { io: cliIo, out } = io();
     await runGenerate({ fromSnapshot: snapshotFile, out: 'gen/moca.ts', dryRun: false, cwd: dir, env: {}, io: cliIo });
-    expect(out.at(-1)).toBe(`Wrote 5 commands to ${join(dir, 'gen/moca.ts')}`);
-    expect(await readFile(join(dir, 'gen/moca.ts'), 'utf8')).toMatch(/— 5 commands\./);
+    expect(out.at(-1)).toBe(`Wrote 8 commands to ${join(dir, 'gen/moca.ts')}`);
+    expect(await readFile(join(dir, 'gen/moca.ts'), 'utf8')).toMatch(/— 8 commands\./);
+  });
+
+  it('prints at most 50 warnings, then a count of the rest', async () => {
+    const dir = await tempDir();
+    const commands = Array.from({ length: 53 }, (_, i) => ({
+      name: `cmd ${String(i).padStart(2, '0')}`,
+      args: [{ name: 'bad-name', dtype: 'STRING', required: false }],
+    }));
+    const snapshotFile = join(dir, 'snap.json');
+    await writeFile(snapshotFile, JSON.stringify({ mocakitVersion: '0.1.0', generatedAt: '', server: 'https://moca.test', commands }));
+    const { io: cliIo, err, out } = io();
+    await runGenerate({ fromSnapshot: snapshotFile, out: 'gen/moca.ts', dryRun: true, cwd: dir, env: {}, io: cliIo });
+    expect(err).toHaveLength(51);
+    expect(err[0]).toBe('warning: Command "cmd 00" argument "bad-name" is not a valid MOCA argument name; dropped the argument');
+    expect(err[49]).toBe('warning: Command "cmd 49" argument "bad-name" is not a valid MOCA argument name; dropped the argument');
+    expect(err[50]).toBe('…and 3 more warnings');
+    expect(out.at(-1)).toMatch(/^Would write 53 commands/);
+  });
+
+  it('prints exactly 50 warnings without a summary line', async () => {
+    const dir = await tempDir();
+    const commands = Array.from({ length: 50 }, (_, i) => ({
+      name: `cmd ${String(i).padStart(2, '0')}`,
+      args: [{ name: 'bad-name', dtype: 'STRING', required: false }],
+    }));
+    const snapshotFile = join(dir, 'snap.json');
+    await writeFile(snapshotFile, JSON.stringify({ mocakitVersion: '0.1.0', generatedAt: '', server: 'https://moca.test', commands }));
+    const { io: cliIo, err } = io();
+    await runGenerate({ fromSnapshot: snapshotFile, out: 'gen/moca.ts', dryRun: true, cwd: dir, env: {}, io: cliIo });
+    expect(err).toHaveLength(50);
+    expect(err.every((line) => line.startsWith('warning: '))).toBe(true);
   });
 
   describe('introspection snapshot', () => {

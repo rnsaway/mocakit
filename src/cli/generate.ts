@@ -28,6 +28,30 @@ export interface GenerateOptions {
 
 const DEFAULT_OUT = 'src/moca.generated.ts';
 
+/** How many individual warnings the CLI prints; the rest are summarized in one line. */
+const MAX_PRINTED_WARNINGS = 50;
+
+/** Prints warnings up to `MAX_PRINTED_WARNINGS` across all calls to `print`; `finish` reports the rest. */
+function warningPrinter(io: CliIo): { print(warnings: readonly string[]): void; finish(): void } {
+  let printed = 0;
+  let suppressed = 0;
+  return {
+    print(warnings) {
+      for (const warning of warnings) {
+        if (printed < MAX_PRINTED_WARNINGS) {
+          io.error(`warning: ${warning}`);
+          printed++;
+        } else {
+          suppressed++;
+        }
+      }
+    },
+    finish() {
+      if (suppressed > 0) io.error(`…and ${suppressed} more warnings`);
+    },
+  };
+}
+
 const isSet = (value: string | undefined): boolean => typeof value === 'string' && value.trim() !== '';
 
 /** Prefers a NodeJS error `code` (e.g. `ENOENT`) over the full message, which may embed the
@@ -40,6 +64,7 @@ function errorDetail(error: unknown): string {
 
 export async function runGenerate(options: GenerateOptions): Promise<void> {
   const { cwd, io, env } = options;
+  const warn = warningPrinter(io);
   const hasFullEnvCredentials = isSet(env.MOCA_URL) && isSet(env.MOCA_USER) && isSet(env.MOCA_PASSWORD);
   const configOptional = options.fromSnapshot !== undefined || hasFullEnvCredentials;
   const loaded = await loadConfig(options.configPath, cwd, { optional: configOptional });
@@ -87,7 +112,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       await client.logout().catch(() => undefined);
     }
     snapshot = introspected.snapshot;
-    for (const warning of introspected.warnings) io.error(`warning: ${warning}`);
+    warn.print(introspected.warnings);
 
     // Leave an existing snapshot byte-for-byte alone when the server's commands haven't changed,
     // so regenerating doesn't churn `generatedAt` (and the diff) for nothing.
@@ -106,7 +131,8 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
 
   const commands = filterCommands(snapshot.commands, config);
   const { code, warnings, count } = emit({ ...snapshot, commands }, { version: VERSION });
-  for (const warning of warnings) io.error(`warning: ${warning}`);
+  warn.print(warnings);
+  warn.finish();
 
   if (!options.dryRun) {
     try {
