@@ -274,7 +274,7 @@ keys (or re-hash them with a secret) — anyone who can read a key and knows the
 brute-force a short password offline.
 
 Call `await moca.login()` to fail fast at startup instead of on the first real request (it resolves to the login
-row, without the `session_key` column), and `await moca.logout()` to end the session. `logout()` evicts the cached session even if the server-side logout call itself fails (the
+row, with the session key removed), and `await moca.logout()` to end the session. `logout()` evicts the cached session even if the server-side logout call itself fails (the
 error is still rethrown after the eviction). With the default `session.reuse: true`, `logout()` ends the session
 for **every** client sharing those credentials, not just the one you called it on.
 

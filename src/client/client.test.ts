@@ -514,6 +514,31 @@ describe('MocaClient final-review fixes', () => {
     expect(JSON.stringify(row)).not.toContain('KEY1');
   });
 
+  it('login() omits the session key when it is found by column position under another name', async () => {
+    const fake = fakeMoca(() =>
+      mocaXml(0, {
+        columns: [{ name: 'usr_id' }, { name: 'locale_id' }, { name: 'addon_id' }, { name: 'cust_lvl', type: 'I' }, { name: 'sess' }],
+        rows: [['JDOE', 'US_ENGLISH', 'WM', '0', 'KEY9']],
+      }),
+    );
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    const row = await moca.login();
+    expect(row).toEqual({ usr_id: 'JDOE', locale_id: 'US_ENGLISH', addon_id: 'WM', cust_lvl: 0 });
+    expect(JSON.stringify(row)).not.toContain('KEY9');
+  });
+
+  it('login() omits a numeric-looking session key even when its column converts to a number', async () => {
+    const fake = fakeMoca(() =>
+      mocaXml(0, {
+        columns: [{ name: 'usr_id' }, { name: 'locale_id' }, { name: 'addon_id' }, { name: 'cust_lvl', type: 'I' }, { name: 'sess', type: 'I' }],
+        rows: [['JDOE', 'US_ENGLISH', 'WM', '0', '12345']],
+      }),
+    );
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    const row = await moca.login();
+    expect(row).toEqual({ usr_id: 'JDOE', locale_id: 'US_ENGLISH', addon_id: 'WM', cust_lvl: 0 });
+  });
+
   it('login() honours defaults.convert', async () => {
     const { moca } = client(() => ORDERS, { defaults: { convert: false } });
     const row = await moca.login();

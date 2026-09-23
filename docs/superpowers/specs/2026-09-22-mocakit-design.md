@@ -185,7 +185,8 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
   being silently dropped from a command that may have side effects.
 - `call<T>(spec, args, opts?)`: used by generated functions; validates, renders, executes.
 - `login()`: forces its own login now (fail fast, bypassing single-flight) and stores the new session; returns the
-  login row converted per `defaults.convert`, with any `session_key` column (case-insensitive) removed.
+  login row converted per `defaults.convert`, with the session key removed: any `session_key` column
+  (case-insensitive) and any column whose raw value equals the key (e.g. when it was found by the position-5 fallback).
 - `logout()`: sends `logout user`, then evicts the cached session. The session is evicted even if the
   server call fails, and the error is then rethrown. It acts only on an already-cached session (not an in-flight
   login), and with `reuse: true` it ends the session for every client sharing those credentials.

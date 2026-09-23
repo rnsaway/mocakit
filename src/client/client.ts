@@ -156,8 +156,8 @@ export class MocaClient {
 
   /**
    * Logs in now (fail fast) and returns the login row, converted per `defaults.convert`. The
-   * `session_key` column is omitted from the row: the key is a live credential, and the client
-   * manages it itself.
+   * session key is omitted from the row (the `session_key` column, and any column whose value is
+   * the key): it is a live credential, and the client manages it itself.
    *
    * Unlike `exec`/`call`, this does not go through the single-flight login path: it always
    * performs its own `login user` request, even if another call is already logging in. Any
@@ -374,8 +374,11 @@ export class MocaClient {
         throw new MocaAuthError('MOCA login succeeded but no session_key was returned', { status: MOCA_STATUS.OK });
       }
       const row: MocaRow = { ...(toRows(response, this.#config.defaults?.convert ?? true)[0] ?? {}) };
+      // Never hand the live key back: drop the `session_key` column by name, and any column whose
+      // raw value is the key itself (covers the position-5 fallback under another column name).
+      // The raw row is compared, not the converted one, so type conversion can't hide a match.
       for (const column of Object.keys(row)) {
-        if (column.toLowerCase() === 'session_key') delete row[column];
+        if (column.toLowerCase() === 'session_key' || rawRow?.[column] === key) delete row[column];
       }
       return { state: { key, locale: pick(rawRow, 'locale_id', 2), createdAt: this.#now() }, row };
     } catch (error) {
