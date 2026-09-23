@@ -43,7 +43,7 @@ describe('snapshot IO', () => {
       server: 'https://m/service',
       commands: [],
     };
-    const BOM = '﻿';
+    const BOM = '\uFEFF';
     await writeFile(path, `${BOM}${JSON.stringify(snapshot)}`, 'utf8');
     expect(await readSnapshot(path)).toEqual(snapshot);
   });

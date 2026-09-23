@@ -32,22 +32,16 @@ export default defineConfig({
 });
 ```
 
-Don't put the password on the command line, where it can end up in shell history or a process list. Export the
-connection as environment variables instead:
+Don't put the password on the command line, where it can end up in shell history or a process list. Keep it in a
+`.env` file (gitignored) and load it explicitly:
 
 ```bash
-export MOCA_URL=https://moca.example.com:4700/service MOCA_USER=me MOCA_PASSWORD=secret
-npx mocakit generate
+node --env-file=.env node_modules/mocakit/dist/cli.js generate
 ```
 
-or keep them in a `.env` file (gitignored) and load it explicitly:
-
-```bash
-node --env-file=.env node_modules/.bin/mocakit generate
-```
-
-or add `"moca:generate": "node --env-file=.env node_modules/.bin/mocakit generate"` to `package.json` and run
-`npm run moca:generate`.
+or add `"moca:generate": "node --env-file=.env node_modules/mocakit/dist/cli.js generate"` to `package.json` and
+run `npm run moca:generate`. Exporting the variables inline (`export MOCA_URL=... MOCA_PASSWORD=...`) works too,
+but it also ends up in your shell history.
 
 This writes `src/moca.generated.ts` and, next to it, a `src/moca.commands.json` snapshot. **Commit both files.**
 The snapshot lets you regenerate without contacting the server — for example in CI, or after only changing
@@ -266,15 +260,15 @@ login, to stop waiting on it without cancelling that login for other callers).
   `mk.OptionalArgsCommand<Args, CommandName>`) and installed as **properties** on the prototype, not as real
   class methods — this keeps type-checking cheap even with thousands of commands. One consequence: if you
   subclass the generated `Moca` class, you can't override a command with a `class` method declaration.
-  TypeScript rejects it (error TS2425, "Class field ... defined by the parent class is not accessible in the
-  derived class"), because a property can't be overridden by a method. Override it as a property instead:
+  TypeScript rejects it with error TS2425 ("Class 'Moca' defines instance member property 'listOrders', but
+  extended class '…' defines it as instance member function."), because a property can't be overridden by a
+  method. Override it as a property instead:
 
   ```ts
   class MyMoca extends Moca {
-    override listOrders: Moca['listOrders'] = (args, opts) => {
-      // ... custom behavior ...
-      return super.listOrders(args, opts as any);
-    };
+    // The cast is needed because `listOrders`'s overloaded call signature can't be written directly
+    // as an arrow function's type; `Moca['listOrders']` is where the real, checked signature lives.
+    override listOrders = ((args, opts) => super.listOrders(args, opts as any)) as Moca['listOrders'];
   }
   ```
 
