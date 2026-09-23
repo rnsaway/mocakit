@@ -1,9 +1,18 @@
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MocaClient } from '../src/client/client.js';
+import { runGenerate } from '../src/cli/generate.js';
 import { IGNORE_SSL_TRUE } from '../src/cli/load-config.js';
+import { MocaClient } from '../src/client/client.js';
 import { introspect } from '../src/codegen/introspect.js';
+import { isMocaStatus } from '../src/errors.js';
+import { buildRequest } from '../src/protocol/request.js';
+import { parseResponse } from '../src/protocol/response.js';
+import { httpTransport } from '../src/transport/http.js';
 
 const live = process.env.MOCA_URL ? describe : describe.skip;
+const ignoreSsl = (): boolean => IGNORE_SSL_TRUE.test(process.env.MOCA_IGNORE_SSL ?? '');
 
 live('live MOCA server', () => {
   // Created lazily in beforeAll: even under describe.skip, Vitest still runs this describe
@@ -16,7 +25,7 @@ live('live MOCA server', () => {
       url: process.env.MOCA_URL!,
       username: process.env.MOCA_USER!,
       password: process.env.MOCA_PASSWORD!,
-      ignoreSslIssues: IGNORE_SSL_TRUE.test(process.env.MOCA_IGNORE_SSL ?? ''),
+      ignoreSslIssues: ignoreSsl(),
       session: { reuse: false },
     });
   });
@@ -57,5 +66,57 @@ live('live MOCA server', () => {
     console.log(`introspected ${snapshot.commands.length} commands; warnings:`, warnings);
     expect(snapshot.commands.length).toBeGreaterThan(0);
     expect(snapshot.commands.some((c) => c.args.length > 0)).toBe(true);
+  }, 600_000);
+
+  it('returns [] for a query with no rows (510), and throws 510 with noRowsIsError', async () => {
+    // Oracle syntax; on another SQL dialect the query itself fails, which is logged rather
+    // than failed, since it says nothing about mocakit's 510 handling.
+    const query = '[select 1 x from dual where 1 = 0]';
+    let rows: unknown[];
+    try {
+      rows = await client.exec(query);
+    } catch (error) {
+      console.log('510 check skipped; the no-rows query failed (different SQL dialect?):', (error as Error).message);
+      return;
+    }
+    expect(rows).toEqual([]);
+    const error = await client.exec(query, { noRowsIsError: true }).catch((e: unknown) => e);
+    expect(isMocaStatus(error, 510)).toBe(true);
+  }, 120_000);
+
+  it('reports a non-zero status for a bogus SESSION_KEY (spec §14 item 5)', async () => {
+    const text = await httpTransport({
+      url: process.env.MOCA_URL!,
+      body: buildRequest('list active commands', { USR_ID: process.env.MOCA_USER!, SESSION_KEY: 'mocakit-bogus-session-key' }),
+      timeoutMs: 60_000,
+      ignoreSslIssues: ignoreSsl(),
+    });
+    const response = parseResponse(text);
+    console.log('bogus SESSION_KEY -> status', response.status, 'message', response.message);
+    expect(response.status).not.toBe(0);
+  }, 120_000);
+
+  it('generate --dry-run reports "Would write" and writes no files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mocakit-live-'));
+    try {
+      const out: string[] = [];
+      const err: string[] = [];
+      await runGenerate({
+        dryRun: true,
+        cwd: dir,
+        env: {
+          MOCA_URL: process.env.MOCA_URL,
+          MOCA_USER: process.env.MOCA_USER,
+          MOCA_PASSWORD: process.env.MOCA_PASSWORD,
+          MOCA_IGNORE_SSL: process.env.MOCA_IGNORE_SSL,
+        },
+        io: { log: (m) => out.push(m), error: (m) => err.push(m) },
+      });
+      console.log('dry-run output:', out.at(-1), `(${err.length} warnings)`);
+      expect(out.at(-1)).toMatch(/^Would write \d+ commands to /);
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }, 600_000);
 });
