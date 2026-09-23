@@ -373,9 +373,12 @@ export default defineConfig({
 });
 ```
 
-Config lookup order: `--config`, then `mocakit.config.{ts,mjs,js,json}` in cwd. The `.ts` config is loaded with
-`jiti` (a dev-time dependency of the CLI only). Credentials can come from `MOCA_URL` / `MOCA_USER` /
-`MOCA_PASSWORD` env vars when not in the config.
+Config lookup order: `--config`, then `mocakit.config.{ts,mts,mjs,js,json}` in cwd. JS/TS configs are executed
+(loaded with `jiti`, a CLI-only dependency, with its disk cache disabled so secrets in a config never land in the OS
+temp directory). A config must export a plain object. Credentials can come from `MOCA_URL` / `MOCA_USER` /
+`MOCA_PASSWORD` (and `MOCA_IGNORE_SSL=1|yes|true`) env vars when not in the config; if all three are set, or
+`--from-snapshot` is used, the config file is optional. Relative `out`/`snapshot` paths in a config file resolve
+against the config file's directory; CLI flags resolve against the cwd. JSON config errors never echo file content.
 
 Consumers add `"moca:generate": "mocakit generate"` to their `package.json`. This repo has a `generate` script that
 runs the CLI from source against a real server into `examples/moca.generated.ts`.
@@ -390,10 +393,10 @@ runs the CLI from source against a real server into `examples/moca.generated.ts`
 3. Columns are matched case-insensitively against a candidate list per field. If a required field can't be
    matched, the generator fails with an error that lists the columns actually received. Exact column names are
    confirmed against a live server during implementation.
-4. Filters (`include`, `exclude`, `levels`) are applied.
-5. A `Snapshot` (`{ generatedAt, mocakitVersion, server: url, commands: [...] }`, sorted by command name, argument
-   order preserved) is written to `snapshot`. `--from-snapshot` skips the server entirely, for CI and offline
-   use.
+4. The full, unfiltered `Snapshot` (`{ generatedAt, mocakitVersion, server: url, commands: [...] }`, sorted by
+   command name, argument order preserved) is written to `snapshot`, so filters can change without re-introspecting.
+   `--from-snapshot` skips the server entirely, for CI and offline use.
+5. Filters (`include`, `exclude`, `levels`) are applied when emitting.
 
 ### Emitted file
 
