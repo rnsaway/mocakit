@@ -12,6 +12,7 @@
     "typescript",
     "codegen"
   ],
+  "author": "Nicholas Saway (https://github.com/rnsaway)",
   "homepage": "https://github.com/rnsaway/mocakit#readme",
   "repository": {
     "type": "git",
