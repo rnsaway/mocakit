@@ -42,7 +42,7 @@
     }
   },
   "bin": {
-    "mocakit": "./dist/cli.js"
+    "mocakit": "dist/cli.js"
   },
   "files": [
     "dist"
