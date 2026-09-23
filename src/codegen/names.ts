@@ -42,6 +42,24 @@ export function toPascal(name: string): string {
   return capitalize(name);
 }
 
+/** Characters a MOCA command name may contain (checked after trimming). Anything else -- quotes,
+ * brackets, semicolons, comment markers -- is rejected rather than emitted into generated code. */
+const COMMAND_NAME = /^[A-Za-z0-9_][A-Za-z0-9_ .\-]*$/;
+
+export function isValidCommandName(name: string): boolean {
+  return COMMAND_NAME.test(name.trim());
+}
+
+/** The case- and whitespace-insensitive key commands are matched and de-duplicated by. */
+export function commandKey(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/** Orders strings by UTF-16 code unit, independent of locale. */
+export function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function isIdentifier(name: string): boolean {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name);
 }

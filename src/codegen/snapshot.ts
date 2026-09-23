@@ -1,5 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { stripBom } from '../util/text.js';
+import { isValidCommandName } from './names.js';
 
 export interface SnapshotArg {
   name: string;
@@ -45,7 +47,7 @@ function isValidArg(arg: unknown): arg is SnapshotArg {
 }
 
 export async function readSnapshot(path: string): Promise<Snapshot> {
-  const raw = (await readFile(path, 'utf8')).replace(/^\uFEFF/, '');
+  const raw = stripBom(await readFile(path, 'utf8'));
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -74,6 +76,7 @@ export async function readSnapshot(path: string): Promise<Snapshot> {
     ) {
       invalid(path, commandName);
     }
+    if (!isValidCommandName(c.name as string)) invalid(path, `invalid command name ${JSON.stringify(c.name)}`);
   }
 
   return parsed as Snapshot;

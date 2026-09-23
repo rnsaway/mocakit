@@ -9,6 +9,9 @@ export interface SessionState {
 /**
  * Pluggable session cache (e.g. file- or Redis-backed). Only the in-memory store ships.
  *
+ * The stored values are live MOCA session keys: anyone who can read them can act as that user
+ * until the session expires, so a persistent store must protect its values like credentials.
+ *
  * Cache keys (see `sessionCacheKey`) are an unsalted sha256 hash of the URL, username and
  * password. A persistent store such as Redis or a file should restrict read access to its
  * keys, or re-hash the key with a secret before using it, since anyone who can read a key
@@ -27,8 +30,8 @@ export interface SessionStore {
 }
 
 /**
- * States are stored by reference and are never evicted except when overwritten or explicitly
- * deleted on a stale lookup. That is acceptable for v1 (bounded by the number of distinct
+ * States are stored by reference and are never evicted except when overwritten (by the next
+ * login) or deleted by `invalidate`/`logout`; a stale entry found on lookup is left in place. That is acceptable for v1 (bounded by the number of distinct
  * credentials a process uses) but would need a TTL or LRU policy for long-lived, high-cardinality
  * use.
  */

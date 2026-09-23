@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { MocaClient, type MocaClientDeps } from '../client/client.js';
 import { emit } from '../codegen/emit.js';
 import { filterCommands } from '../codegen/filter.js';
@@ -79,12 +80,21 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     const connection = resolveConnection(config, env);
     io.log(`Introspecting ${redactUrl(connection.url)} …`);
     const client = new MocaClient({ ...connection, session: { reuse: false } }, options.deps);
+    let introspected: Awaited<ReturnType<typeof introspect>>;
     try {
-      snapshot = await introspect(client, { version: VERSION, server: connection.url });
+      introspected = await introspect(client, { version: VERSION, server: connection.url });
     } finally {
       await client.logout().catch(() => undefined);
     }
-    if (!options.dryRun) {
+    snapshot = introspected.snapshot;
+    for (const warning of introspected.warnings) io.error(`warning: ${warning}`);
+
+    // Leave an existing snapshot byte-for-byte alone when the server's commands haven't changed,
+    // so regenerating doesn't churn `generatedAt` (and the diff) for nothing.
+    const existing = await readSnapshot(snapshotPath).catch(() => null);
+    if (existing !== null && isDeepStrictEqual(existing.commands, snapshot.commands)) {
+      if (!options.dryRun) io.log(`Snapshot unchanged: ${snapshotPath}`);
+    } else if (!options.dryRun) {
       try {
         await writeSnapshot(snapshotPath, snapshot);
       } catch (error) {
@@ -95,7 +105,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   }
 
   const commands = filterCommands(snapshot.commands, config);
-  const { code, warnings } = emit({ ...snapshot, commands }, { version: VERSION });
+  const { code, warnings, count } = emit({ ...snapshot, commands }, { version: VERSION });
   for (const warning of warnings) io.error(`warning: ${warning}`);
 
   if (!options.dryRun) {
@@ -105,5 +115,5 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       throw new Error(`Cannot write ${out}: ${errorDetail(error)}`);
     }
   }
-  io.log(`${options.dryRun ? 'Would write' : 'Wrote'} ${commands.length} commands to ${out}`);
+  io.log(`${options.dryRun ? 'Would write' : 'Wrote'} ${count} commands to ${out}`);
 }

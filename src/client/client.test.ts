@@ -151,7 +151,7 @@ describe('MocaClient login, logout and session', () => {
 
   it('login() returns the converted login row and makes the session active', async () => {
     const { moca } = client(() => ORDERS);
-    await expect(moca.login()).resolves.toMatchObject({ session_key: 'KEY1', cust_lvl: 0 });
+    await expect(moca.login()).resolves.toEqual({ usr_id: 'JDOE', locale_id: 'US_ENGLISH', addon_id: 'WM', cust_lvl: 0 });
     expect(moca.session).toMatchObject({ active: true, locale: 'US_ENGLISH' });
   });
 
@@ -479,5 +479,60 @@ describe('MocaClient additional environment and result coverage', () => {
 describe('MOCA_STATUS', () => {
   it('is frozen', () => {
     expect(Object.isFrozen(MOCA_STATUS)).toBe(true);
+  });
+});
+
+describe('MocaClient final-review fixes', () => {
+  it('exec() rejects extraArgs without contacting the server', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    const error = (await moca.exec('delete orders', { extraArgs: { ordnum: 'A1' } }).catch((e: unknown) => e)) as MocaArgumentError;
+    expect(error).toBeInstanceOf(MocaArgumentError);
+    expect(error.message).toBe('extraArgs is not supported by exec(); put arguments in the MOCA text or use a generated command');
+    expect(requests).toHaveLength(0);
+  });
+
+  it('exec() rejects extraArgs even when every value is null/undefined', async () => {
+    const { moca } = client(() => ORDERS);
+    await expect(moca.exec('x', { extraArgs: { a: undefined } })).rejects.toBeInstanceOf(MocaArgumentError);
+  });
+
+  it('exec() accepts an empty extraArgs object', async () => {
+    const { moca } = client(() => ORDERS);
+    await expect(moca.exec('list orders', { extraArgs: {} })).resolves.toHaveLength(1);
+  });
+
+  it('login() omits session_key (any casing) from the returned row', async () => {
+    const fake = fakeMoca(() =>
+      mocaXml(0, {
+        columns: [{ name: 'usr_id' }, { name: 'locale_id' }, { name: 'addon_id' }, { name: 'cust_lvl', type: 'I' }, { name: 'SESSION_KEY' }],
+        rows: [['JDOE', 'US_ENGLISH', 'WM', '0', 'KEY1']],
+      }),
+    );
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    const row = await moca.login();
+    expect(row).toEqual({ usr_id: 'JDOE', locale_id: 'US_ENGLISH', addon_id: 'WM', cust_lvl: 0 });
+    expect(JSON.stringify(row)).not.toContain('KEY1');
+  });
+
+  it('login() honours defaults.convert', async () => {
+    const { moca } = client(() => ORDERS, { defaults: { convert: false } });
+    const row = await moca.login();
+    expect(row).toEqual({ usr_id: 'JDOE', locale_id: 'US_ENGLISH', addon_id: 'WM', cust_lvl: '0' });
+  });
+
+  it('rejects session.store combined with reuse: false', () => {
+    expect(() => new MocaClient({ ...baseConfig, session: { reuse: false, store: new MemorySessionStore() } })).toThrow(
+      MocaArgumentError,
+    );
+  });
+
+  it.each([0, -5])('maxAgeMinutes %d reuses a session until the server rejects it', async (maxAgeMinutes) => {
+    const clock = { t: 0 };
+    const { moca, requests } = client(() => ORDERS, { session: { reuse: false, maxAgeMinutes } }, () => clock.t);
+    await moca.exec('a');
+    clock.t = 365 * 24 * 60 * 60_000;
+    await moca.exec('b');
+    expect(requests.map((r) => r.query.split(' ')[0])).toEqual(['login', 'a', 'b']);
+    expect(moca.session.active).toBe(true);
   });
 });

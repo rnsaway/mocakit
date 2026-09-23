@@ -90,6 +90,13 @@ export class MocaClient {
       );
     }
 
+    if (config.session?.store !== undefined && config.session.reuse === false) {
+      throw new MocaArgumentError(
+        'MocaConfig.session.store cannot be combined with session.reuse: false (a private session is never stored)',
+        'session.store',
+      );
+    }
+
     this.#config = config;
     this.#transport = deps.transport ?? httpTransport;
     this.#now = deps.now ?? Date.now;
@@ -98,17 +105,33 @@ export class MocaClient {
     this.#sessions = new SessionManager({
       cacheKey: sessionCacheKey(config.url, config.username, config.password),
       store: reuse ? (config.session?.store ?? sharedSessionStore) : new MemorySessionStore(),
+      // `maxAgeMinutes <= 0` (zero or negative) means "reuse until the server rejects it".
       maxAgeMs: minutes <= 0 ? Number.POSITIVE_INFINITY : minutes * 60_000,
       login: async () => (await this.#login()).state,
       now: this.#now,
     });
   }
 
-  /** Runs raw MOCA text. The caller is responsible for quoting. */
+  /**
+   * Runs raw MOCA text. The caller is responsible for quoting.
+   *
+   * `opts.extraArgs` is rejected: there is no `where` clause to append it to safely, and silently
+   * dropping a filter from a command with side effects would be far worse than failing.
+   */
   exec<T = MocaRow>(moca: string, opts?: RowsOptions): Promise<T[]>;
   exec<T = MocaRow>(moca: string, opts: FullOptions): Promise<MocaResult<T>>;
   exec(moca: string, opts?: CallOptions): Promise<unknown[] | MocaResult<unknown>>;
   async exec(moca: string, opts: CallOptions = {}): Promise<unknown[] | MocaResult<unknown>> {
+    if (opts.extraArgs !== undefined && Object.keys(opts.extraArgs).length > 0) {
+      this.#enrich(
+        new MocaArgumentError(
+          'extraArgs is not supported by exec(); put arguments in the MOCA text or use a generated command',
+          'extraArgs',
+        ),
+        moca,
+        undefined,
+      );
+    }
     return this.#execute(moca, undefined, opts);
   }
 
@@ -132,7 +155,9 @@ export class MocaClient {
   }
 
   /**
-   * Logs in now (fail fast) and returns the converted login row.
+   * Logs in now (fail fast) and returns the login row, converted per `defaults.convert`. The
+   * `session_key` column is omitted from the row: the key is a live credential, and the client
+   * manages it itself.
    *
    * Unlike `exec`/`call`, this does not go through the single-flight login path: it always
    * performs its own `login user` request, even if another call is already logging in. Any
@@ -199,11 +224,7 @@ export class MocaClient {
     if (response.status === MOCA_STATUS.SESSION_EXPIRED) {
       await this.#sessions.invalidate(session);
       if (options.signal?.aborted === true) {
-        this.#enrich(
-          new MocaTransportError(`Request to ${redactUrl(this.#config.url)} was aborted`, { cause: options.signal.reason }),
-          command,
-          args,
-        );
+        this.#enrich(this.#abortError(options.signal), command, args);
       }
 
       // Retrying is safe: MOCA rejects an invalid/expired session before executing the
@@ -255,10 +276,8 @@ export class MocaClient {
     }
   }
 
-  #throwIfAborted(signal: AbortSignal | undefined): void {
-    if (signal?.aborted === true) {
-      throw new MocaTransportError(`Request to ${redactUrl(this.#config.url)} was aborted`, { cause: signal.reason });
-    }
+  #abortError(signal: AbortSignal): MocaTransportError {
+    return new MocaTransportError(`Request to ${redactUrl(this.#config.url)} was aborted`, { cause: signal.reason });
   }
 
   /**
@@ -273,13 +292,13 @@ export class MocaClient {
    * already returned via the abort path -- an unhandled rejection.
    */
   async #acquireSession(signal: AbortSignal | undefined): Promise<SessionState> {
-    if (signal !== undefined) this.#throwIfAborted(signal);
+    if (signal?.aborted === true) throw this.#abortError(signal);
     const acquiring = this.#sessions.acquire();
     if (signal === undefined) return acquiring;
 
     return new Promise<SessionState>((resolve, reject) => {
       const onAbort = (): void => {
-        reject(new MocaTransportError(`Request to ${redactUrl(this.#config.url)} was aborted`, { cause: signal.reason }));
+        reject(this.#abortError(signal));
       };
       signal.addEventListener('abort', onAbort, { once: true });
       acquiring.then(
@@ -354,10 +373,11 @@ export class MocaClient {
       if (key === null) {
         throw new MocaAuthError('MOCA login succeeded but no session_key was returned', { status: MOCA_STATUS.OK });
       }
-      return {
-        state: { key, locale: pick(rawRow, 'locale_id', 2), createdAt: this.#now() },
-        row: toRows(response, true)[0] ?? {},
-      };
+      const row: MocaRow = { ...(toRows(response, this.#config.defaults?.convert ?? true)[0] ?? {}) };
+      for (const column of Object.keys(row)) {
+        if (column.toLowerCase() === 'session_key') delete row[column];
+      }
+      return { state: { key, locale: pick(rawRow, 'locale_id', 2), createdAt: this.#now() }, row };
     } catch (error) {
       if (error instanceof MocaError) error.command = redactCommand(command);
       throw error;

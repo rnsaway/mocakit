@@ -89,4 +89,29 @@ describe('snapshot IO', () => {
     );
     await expect(readSnapshot(path)).rejects.toThrow(/not a mocakit snapshot.*list orders/);
   });
+
+  it.each(['list orders; delete', '', '   ', '-leading dash', "quote'd", 'star */ end'])(
+    'rejects an invalid command name %j, naming it',
+    async (name) => {
+      const path = join(await tempDir(), 'badname.json');
+      await writeFile(
+        path,
+        JSON.stringify({ mocakitVersion: '0.1.0', generatedAt: 'x', server: 'https://m/service', commands: [{ name, args: [] }] }),
+        'utf8',
+      );
+      await expect(readSnapshot(path)).rejects.toThrow(`is not a mocakit snapshot: invalid command name ${JSON.stringify(name)}`);
+    },
+  );
+
+  it('accepts command names with dots, dashes and surrounding whitespace', async () => {
+    const path = join(await tempDir(), 'okname.json');
+    const snapshot: Snapshot = {
+      mocakitVersion: '0.1.0',
+      generatedAt: 'x',
+      server: 'https://m/service',
+      commands: [{ name: ' list-orders.v2 ', args: [] }, { name: '_x 1', args: [] }],
+    };
+    await writeFile(path, JSON.stringify(snapshot), 'utf8');
+    expect(await readSnapshot(path)).toEqual(snapshot);
+  });
 });

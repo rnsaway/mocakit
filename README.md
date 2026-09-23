@@ -5,7 +5,7 @@ MOCA command on your instance into a typed function.
 
 ## Requirements
 
-- Node 20.3+ at runtime.
+- Node 20.6+ (the first release with `--env-file`, used below to keep the password off the command line).
 - TypeScript ≥ 5.4 to consume the generated client (it uses `NoInfer`, added in 5.4).
 - `@types/node` (or another source of DOM lib types) in your project, for the `AbortSignal` type used by
   `CallOptions.signal`.
@@ -118,6 +118,10 @@ Besides `url`/`username`/`password`, `createMoca`/`MocaConfig` also accepts:
 | `timeoutMs` | `300000` | Per HTTP request |
 | `session` | see [Sessions](#sessions) | `{ reuse?, maxAgeMinutes?, store? }` |
 | `defaults` | — | Client-wide call defaults: `{ convert?, noRowsIsError?, autocommit? }` |
+
+`createMoca(config, deps)` also takes an optional second argument, `{ transport?, now? }`, mainly for tests. A custom
+`transport` receives every request body verbatim — including the **password** (in the `login user` request) and
+the live **`SESSION_KEY`** (in every other request) — so only plug in code you trust, and never log its bodies.
 
 ### Argument rendering
 
@@ -241,7 +245,9 @@ createMoca({ ...connection, session: { maxAgeMinutes: 5 } }); // shorter reuse w
 createMoca({ ...connection, session: { store: myStore } });   // e.g. Redis-backed
 ```
 
-Plug in a custom `SessionStore` (`get`/`set`/`delete`) to persist sessions outside the process. Cache keys are an
+Plug in a custom `SessionStore` (`get`/`set`/`delete`) to persist sessions outside the process. Its **values are
+live session keys** — anyone who can read one can act as that user until the session expires — so protect the store
+like a credential. A `store` can't be combined with `reuse: false` (that throws `MocaArgumentError`). Cache keys are an
 **unsalted** `sha256` hash of `[url, username, password]`, so a persistent store must restrict read access to its
 keys (or re-hash them with a secret) — anyone who can read a key and knows the URL/username could otherwise
 brute-force a short password offline.

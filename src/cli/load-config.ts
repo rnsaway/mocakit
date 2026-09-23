@@ -2,6 +2,10 @@ import { access, readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
 import type { MocakitConfig } from '../define-config.js';
 import type { MocaConfig } from '../types.js';
+import { stripBom } from '../util/text.js';
+
+/** Values of `MOCA_IGNORE_SSL` (case-insensitive) that mean `ignoreSslIssues: true`. */
+export const IGNORE_SSL_TRUE = /^(1|yes|true)$/i;
 
 const CANDIDATES = ['mocakit.config.ts', 'mocakit.config.mts', 'mocakit.config.mjs', 'mocakit.config.js', 'mocakit.config.json'];
 
@@ -18,7 +22,7 @@ function isConfigObject(value: unknown): value is Record<string, unknown> {
 async function importConfig(path: string): Promise<MocakitConfig> {
   let loaded: unknown;
   if (extname(path) === '.json') {
-    const raw = (await readFile(path, 'utf8')).replace(/^﻿/, '');
+    const raw = stripBom(await readFile(path, 'utf8'));
     try {
       loaded = JSON.parse(raw);
     } catch {
@@ -90,7 +94,7 @@ export function resolveConnection(config: MocakitConfig, env: Record<string, str
   if (config.device !== undefined) connection.device = config.device;
   if (config.locale !== undefined) connection.locale = config.locale;
   if (config.timeoutMs !== undefined) connection.timeoutMs = config.timeoutMs;
-  const ignoreSsl = config.ignoreSslIssues ?? (/^(1|yes|true)$/i.test(env.MOCA_IGNORE_SSL ?? '') ? true : undefined);
+  const ignoreSsl = config.ignoreSslIssues ?? (IGNORE_SSL_TRUE.test(env.MOCA_IGNORE_SSL ?? '') ? true : undefined);
   if (ignoreSsl !== undefined) connection.ignoreSslIssues = ignoreSsl;
   return connection;
 }

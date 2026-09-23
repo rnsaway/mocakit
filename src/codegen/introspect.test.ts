@@ -24,10 +24,32 @@ const ARGS = mocaXml(0, {
 function run(handler: (r: FakeRequest) => string) {
   const fake = fakeMoca((r) => (r.query.startsWith('login user') ? loginOk() : handler(r)));
   const client = new MocaClient({ ...baseConfig }, { transport: fake.transport });
-  return { promise: introspect(client, { version: '0.1.0', server: 'https://u:p@moca.test/service?x=1' }), requests: fake.requests };
+  const result = introspect(client, { version: '0.1.0', server: 'https://u:p@moca.test/service?x=1' });
+  return { promise: result.then((r) => r.snapshot), result, requests: fake.requests };
 }
 
 describe('introspect', () => {
+  it('skips invalid command names with a warning', async () => {
+    const commands = mocaXml(0, {
+      columns: [{ name: 'command' }],
+      rows: [['list orders'], ["bad'name"], ['drop */ x'], ['-dash'], ['ok.name-2']],
+    });
+    const { result, requests } = run((r) => (r.query === 'list active commands' ? commands : ARGS));
+    const { snapshot, warnings } = await result;
+    expect(snapshot.commands.map((c) => c.name)).toEqual(['list orders', 'ok.name-2']);
+    expect(warnings).toEqual([
+      `Skipped command "bad'name": not a valid MOCA command name`,
+      'Skipped command "drop */ x": not a valid MOCA command name',
+      'Skipped command "-dash": not a valid MOCA command name',
+    ]);
+    expect(requests.some((r) => r.query.includes("bad''name"))).toBe(false);
+  });
+
+  it('returns no warnings for a clean server', async () => {
+    const { result } = run((r) => (r.query === 'list active commands' ? COMMANDS : ARGS));
+    expect((await result).warnings).toEqual([]);
+  });
+
   it('builds a sorted, de-duplicated snapshot from the two list commands', async () => {
     const { promise } = run((r) => (r.query === 'list active commands' ? COMMANDS : ARGS));
     const snapshot = await promise;
@@ -153,7 +175,7 @@ describe('introspect', () => {
       const fake = fakeMoca((r) => (r.query.startsWith('login user') ? loginOk() : mocaXml(510)));
       const client = new MocaClient({ ...baseConfig }, { transport: fake.transport });
       await expect(
-        introspect(client, { version: '0.1.0', server: 'https://moca.test/service', concurrency }),
+        introspect(client, { version: '0.1.0', server: 'https://moca.test/service', concurrency }).then((r) => r.snapshot),
       ).rejects.toThrow(RangeError);
     });
   });

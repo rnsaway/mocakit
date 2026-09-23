@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { MocaClient } from '../client/client.js';
-import { assignMethodNames, isIdentifier, RESERVED_MEMBERS, toMethodBase, toPascal } from './names.js';
+import {
+  assignMethodNames,
+  byCodeUnit,
+  commandKey,
+  isIdentifier,
+  isValidCommandName,
+  RESERVED_MEMBERS,
+  toMethodBase,
+  toPascal,
+} from './names.js';
 
 describe('toMethodBase', () => {
   it('camel-cases words split on non-alphanumerics', () => {
@@ -72,5 +81,20 @@ describe('helpers', () => {
     expect(isIdentifier('wh_id')).toBe(true);
     expect(isIdentifier('wh-id')).toBe(false);
     expect(isIdentifier('1abc')).toBe(false);
+  });
+});
+
+describe('command-name helpers', () => {
+  it('commandKey trims, collapses whitespace and lower-cases', () => {
+    expect(commandKey('  List \t  Orders ')).toBe('list orders');
+  });
+
+  it('byCodeUnit orders by UTF-16 code unit, not locale', () => {
+    expect(['b', 'a', 'B', ' a'].sort(byCodeUnit)).toEqual([' a', 'B', 'a', 'b']);
+  });
+
+  it('isValidCommandName accepts MOCA-style names and rejects anything else', () => {
+    for (const ok of ['list orders', ' list-orders ', 'a.b_c 1', '_x']) expect(isValidCommandName(ok)).toBe(true);
+    for (const bad of ['', '  ', '-x', "a'b", 'a;b', 'a */ b', 'a\tb', 'café']) expect(isValidCommandName(bad)).toBe(false);
   });
 });

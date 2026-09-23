@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MocaClient } from '../src/client/client.js';
+import { IGNORE_SSL_TRUE } from '../src/cli/load-config.js';
 import { introspect } from '../src/codegen/introspect.js';
 
 const live = process.env.MOCA_URL ? describe : describe.skip;
@@ -15,7 +16,7 @@ live('live MOCA server', () => {
       url: process.env.MOCA_URL!,
       username: process.env.MOCA_USER!,
       password: process.env.MOCA_PASSWORD!,
-      ignoreSslIssues: /^(1|yes|true)$/i.test(process.env.MOCA_IGNORE_SSL ?? ''),
+      ignoreSslIssues: IGNORE_SSL_TRUE.test(process.env.MOCA_IGNORE_SSL ?? ''),
       session: { reuse: false },
     });
   });
@@ -52,8 +53,8 @@ live('live MOCA server', () => {
   }, 120_000);
 
   it('introspects', async () => {
-    const snapshot = await introspect(client, { version: 'live', server: process.env.MOCA_URL! });
-    console.log(`introspected ${snapshot.commands.length} commands`);
+    const { snapshot, warnings } = await introspect(client, { version: 'live', server: process.env.MOCA_URL! });
+    console.log(`introspected ${snapshot.commands.length} commands; warnings:`, warnings);
     expect(snapshot.commands.length).toBeGreaterThan(0);
     expect(snapshot.commands.some((c) => c.args.length > 0)).toBe(true);
   }, 600_000);

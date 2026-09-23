@@ -33,7 +33,10 @@ describe('runGenerate', () => {
     const code = await readFile(join(dir, 'gen/moca.ts'), 'utf8');
     expect(code).toContain('export class Moca extends mk.MocaClient');
     expect(out.at(-1)).toBe(`Wrote 5 commands to ${join(dir, 'gen/moca.ts')}`);
-    expect(err).toEqual(['warning: Commands "list orders", "list-orders" map to the same method name; generated listOrders, listOrders_2']);
+    expect(err).toEqual([
+      'warning: Command "list orders" argument "odd-name" is not a valid MOCA argument name; dropped the argument',
+      'warning: Commands "list orders", "list-orders" map to the same method name; generated listOrders, listOrders_2',
+    ]);
   });
 
   it('introspects a server, writes the snapshot next to out, and applies config filters', async () => {
@@ -183,5 +186,88 @@ describe('runGenerate', () => {
       }),
     ).rejects.toThrow(/^Cannot write .*blocked.sub.moca\.ts: /);
     expect(fake.requests).toEqual([]);
+  });
+
+  it('reports the emitted command count, after de-duplication and skips', async () => {
+    const dir = await tempDir();
+    const snapshot = JSON.parse(await readFile(fixture, 'utf8'));
+    snapshot.commands.push(
+      { name: 'EXEC', args: [] },
+      { name: 'bad required', args: [{ name: 'a-b', dtype: 'S', required: true }] },
+    );
+    const snapshotFile = join(dir, 'snap.json');
+    await writeFile(snapshotFile, JSON.stringify(snapshot));
+    const { io: cliIo, out } = io();
+    await runGenerate({ fromSnapshot: snapshotFile, out: 'gen/moca.ts', dryRun: false, cwd: dir, env: {}, io: cliIo });
+    expect(out.at(-1)).toBe(`Wrote 5 commands to ${join(dir, 'gen/moca.ts')}`);
+    expect(await readFile(join(dir, 'gen/moca.ts'), 'utf8')).toMatch(/— 5 commands\./);
+  });
+
+  describe('introspection snapshot', () => {
+    const introspectingServer = (commandRows: string[][]) =>
+      fakeMoca((r) => {
+        if (r.query.startsWith('login user')) return loginOk();
+        if (r.query === 'list active commands') return mocaXml(0, { columns: [{ name: 'command' }], rows: commandRows });
+        if (r.query === 'list active command arguments') {
+          return mocaXml(0, {
+            columns: [{ name: 'command' }, { name: 'argnam' }, { name: 'dtype' }, { name: 'argreq' }],
+            rows: [['list orders', 'wh_id', 'S', '1']],
+          });
+        }
+        return mocaXml(0);
+      });
+    const env = { MOCA_URL: 'https://moca.test/service', MOCA_USER: 'u', MOCA_PASSWORD: 'p' };
+
+    it('leaves an existing snapshot untouched when the introspected commands are unchanged', async () => {
+      const dir = await tempDir();
+      const snapshotFile = join(dir, 'src', 'moca.commands.json');
+      const fake = introspectingServer([['list orders']]);
+      await runGenerate({ out: 'src/moca.generated.ts', dryRun: false, cwd: dir, env, io: io().io, deps: { transport: fake.transport } });
+      const first = await readFile(snapshotFile, 'utf8');
+      const stale = first.replace(/"generatedAt": "[^"]*"/, '"generatedAt": "2000-01-01T00:00:00.000Z"');
+      await writeFile(snapshotFile, stale);
+
+      const { io: cliIo, out } = io();
+      await runGenerate({ out: 'src/moca.generated.ts', dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: fake.transport } });
+      expect(await readFile(snapshotFile, 'utf8')).toBe(stale);
+      expect(out).toContain(`Snapshot unchanged: ${snapshotFile}`);
+    });
+
+    it('rewrites the snapshot when the introspected commands changed', async () => {
+      const dir = await tempDir();
+      const snapshotFile = join(dir, 'src', 'moca.commands.json');
+      await runGenerate({
+        out: 'src/moca.generated.ts',
+        dryRun: false,
+        cwd: dir,
+        env,
+        io: io().io,
+        deps: { transport: introspectingServer([['list orders']]).transport },
+      });
+      await runGenerate({
+        out: 'src/moca.generated.ts',
+        dryRun: false,
+        cwd: dir,
+        env,
+        io: io().io,
+        deps: { transport: introspectingServer([['list orders'], ['create inventory']]).transport },
+      });
+      const snapshot = JSON.parse(await readFile(snapshotFile, 'utf8'));
+      expect(snapshot.commands.map((c: { name: string }) => c.name)).toEqual(['create inventory', 'list orders']);
+    });
+
+    it('prints introspection warnings', async () => {
+      const dir = await tempDir();
+      const { io: cliIo, err } = io();
+      await runGenerate({
+        out: 'src/moca.generated.ts',
+        dryRun: true,
+        cwd: dir,
+        env,
+        io: cliIo,
+        deps: { transport: introspectingServer([['list orders'], ["bad'name"]]).transport },
+      });
+      expect(err).toEqual([`warning: Skipped command "bad'name": not a valid MOCA command name`]);
+    });
   });
 });

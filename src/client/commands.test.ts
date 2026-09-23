@@ -26,14 +26,19 @@ describe('defineCommands', () => {
     expect(call.mock.calls[0]![0]).toBe(LIST_ORDERS);
   });
 
-  it('throws when a name clashes with an existing member on the prototype chain', () => {
+  it('skips a name that clashes with an existing member on the prototype chain, with a warning', () => {
     class Other extends MocaClient {}
-    expect(() => defineCommands(Other.prototype, { exec: EXEC_SPEC })).toThrow(
-      /exec.*regenerate the client with the installed mocakit version/,
-    );
-    expect(() => defineCommands(Other.prototype, { toString: EXEC_SPEC })).toThrow(
-      /toString.*regenerate the client with the installed mocakit version/,
-    );
-    expect(Object.getOwnPropertyNames(Other.prototype)).toEqual(['constructor']);
+    const warn = vi.spyOn(process, 'emitWarning').mockImplementation(() => undefined);
+    try {
+      defineCommands(Other.prototype, { exec: EXEC_SPEC, toString: EXEC_SPEC, listOrders: LIST_ORDERS });
+      expect(warn.mock.calls.map((c) => c[0])).toEqual([
+        'mocakit: generated command "exec" clashes with a MocaClient member and was not installed; regenerate the client with the installed mocakit version',
+        'mocakit: generated command "toString" clashes with a MocaClient member and was not installed; regenerate the client with the installed mocakit version',
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(Object.getOwnPropertyNames(Other.prototype).sort()).toEqual(['constructor', 'listOrders']);
+    expect(Other.prototype.exec).toBe(MocaClient.prototype.exec);
   });
 });

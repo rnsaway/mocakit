@@ -21,17 +21,23 @@ export interface OptionalArgsCommand<A, C extends string> {
   <T = Output<C>>(args?: A, opts?: CallOptions): Promise<NoInfer<T>[] | MocaResult<NoInfer<T>>>;
 }
 
-/** Installs one non-enumerable method per spec on `proto`, each calling `this.call(spec, args, opts)`. */
+/**
+ * Installs one non-enumerable method per spec on `proto`, each calling `this.call(spec, args, opts)`.
+ *
+ * A name that already exists anywhere on `proto`'s prototype chain (a `MocaClient` member added
+ * in a newer mocakit than the one that generated the client, or an `Object.prototype` name) is
+ * skipped with a process warning rather than overwriting that member or throwing at import time.
+ * The generator never emits such names itself; regenerating with the installed mocakit renames
+ * the command (e.g. `cmdExec`).
+ */
 export function defineCommands(proto: MocaClient, specs: Readonly<Record<string, CommandSpec>>): void {
-  const entries = Object.entries(specs);
-  for (const [name] of entries) {
+  for (const [name, spec] of Object.entries(specs)) {
     if (name in proto) {
-      throw new Error(
-        `Cannot define command method "${name}": the name is already a member of the client; regenerate the client with the installed mocakit version`,
+      process.emitWarning(
+        `mocakit: generated command "${name}" clashes with a MocaClient member and was not installed; regenerate the client with the installed mocakit version`,
       );
+      continue;
     }
-  }
-  for (const [name, spec] of entries) {
     Object.defineProperty(proto, name, {
       value: function (this: MocaClient, args?: object, opts?: CallOptions) {
         return this.call(spec, args, opts);

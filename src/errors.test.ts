@@ -72,6 +72,22 @@ describe('errors', () => {
     expect(redactCommand(`list orders where ordnum = 'A'`)).toBe(`list orders where ordnum = 'A'`);
   });
 
+  it('redactCommand also matches pwd keys', () => {
+    expect(redactCommand(`change user where usr_pwd = 'a' and new_PWD = "b"`)).toBe(
+      `change user where usr_pwd = '***' and new_PWD = '***'`,
+    );
+  });
+
+  it('redactCommand redacts an unquoted value token', () => {
+    expect(redactCommand(`x where usr_pswd = s3cr3t and wh_id = 'W'`)).toBe(`x where usr_pswd = '***' and wh_id = 'W'`);
+    expect(redactCommand(`x where pwd=@var`)).toBe(`x where pwd='***'`);
+    expect(redactCommand(`x where password = 12345`)).toBe(`x where password = '***'`);
+  });
+
+  it('redactArgs also matches pwd keys', () => {
+    expect(redactArgs({ usr_pwd: 's', PWD: 't', wh_id: 'W' })).toEqual({ usr_pwd: '***', PWD: '***', wh_id: 'W' });
+  });
+
   it('redactArgs replaces password-like keys with ***', () => {
     expect(redactArgs({ usr_pswd: 's', wh_id: 'W' })).toEqual({ usr_pswd: '***', wh_id: 'W' });
   });

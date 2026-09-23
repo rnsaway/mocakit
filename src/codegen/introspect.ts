@@ -2,9 +2,10 @@ import type { MocaClient } from '../client/client.js';
 import { MocaCommandError } from '../errors.js';
 import type { CommandSpec, MocaColumn, MocaResult, MocaRow, MocaValue } from '../types.js';
 import { redactUrl } from '../util/url.js';
+import { byCodeUnit, commandKey, isValidCommandName } from './names.js';
 import type { Snapshot, SnapshotArg, SnapshotCommand } from './snapshot.js';
 
-// Candidate column names, first match wins (case-insensitive). Confirmed against a live server in Task 21.
+// Candidate column names, first match wins (case-insensitive); to be confirmed against a live server.
 const COMMAND_COLUMNS = {
   name: ['command', 'cmd_nam', 'cmdnam', 'command_name', 'name'],
   level: ['cmplvl', 'cmp_lvl', 'level', 'component_level', 'lvl'],
@@ -28,6 +29,12 @@ export interface IntrospectOptions {
   server: string;
   /** Parallel per-command argument queries in fallback mode. Default 8. */
   concurrency?: number;
+}
+
+export interface IntrospectResult {
+  snapshot: Snapshot;
+  /** Commands that were skipped (e.g. names that are not valid MOCA command names). */
+  warnings: string[];
 }
 
 type ColumnMap<K extends string> = Record<K, string | undefined>;
@@ -85,15 +92,10 @@ function normalizeName(name: string): string {
   return name.trim().replace(/\s+/g, ' ');
 }
 
-/** The case- and whitespace-insensitive key commands and their arguments are matched up by. */
-function normalizeKey(name: string): string {
-  return normalizeName(name).toLowerCase();
-}
-
 function toArgs(rows: MocaRow[], columns: ColumnMap<keyof typeof ARG_COLUMNS>): Map<string, SnapshotArg[]> {
   const byCommand = new Map<string, SnapshotArg[]>();
   for (const row of rows) {
-    const command = normalizeKey(get(row, columns.command));
+    const command = commandKey(get(row, columns.command));
     const name = get(row, columns.name);
     if (name === '') continue;
     const nameKey = name.toLowerCase();
@@ -190,7 +192,7 @@ async function loadArgs(client: MocaClient, commandNames: string[], concurrency:
   const applyPerCommand = (command: string, rows: MocaRow[], columns: MocaColumn[]): void => {
     if (rows.length === 0) return;
     const args = parseArgs(rows, columns.map((c) => c.name), ARGS_BY_COMMAND[0], false).get('') ?? [];
-    if (args.length > 0) byCommand.set(normalizeKey(command), args);
+    if (args.length > 0) byCommand.set(commandKey(command), args);
   };
   applyPerCommand(probeCommand, probeResult.rows, probeResult.columns);
 
@@ -208,7 +210,7 @@ async function loadArgs(client: MocaClient, commandNames: string[], concurrency:
   return byCommand;
 }
 
-export async function introspect(client: MocaClient, options: IntrospectOptions): Promise<Snapshot> {
+export async function introspect(client: MocaClient, options: IntrospectOptions): Promise<IntrospectResult> {
   if (options.concurrency !== undefined && (!Number.isInteger(options.concurrency) || options.concurrency < 1)) {
     throw new RangeError('IntrospectOptions.concurrency must be an integer >= 1');
   }
@@ -221,11 +223,18 @@ export async function introspect(client: MocaClient, options: IntrospectOptions)
   if (commandColumnNames.length === 0) throw new Error('"list active commands" returned no commands');
   const columns = resolveColumns<keyof typeof COMMAND_COLUMNS>(commandColumnNames, COMMAND_COLUMNS, ['name'], 'list active commands');
 
+  const warnings: string[] = [];
   const commands = new Map<string, SnapshotCommand>();
   for (const row of commandResult.rows) {
     const name = normalizeName(get(row, columns.name));
     if (name === '') continue;
-    const key = normalizeKey(name);
+    // Names outside MOCA's usual character set (quotes, semicolons, comment markers, ...) are
+    // never queried or emitted: they would end up inside MOCA text and generated source.
+    if (!isValidCommandName(name)) {
+      warnings.push(`Skipped command ${JSON.stringify(name)}: not a valid MOCA command name`);
+      continue;
+    }
+    const key = commandKey(name);
     if (commands.has(key)) continue;
     const command: SnapshotCommand = { name, args: [] };
     for (const field of ['level', 'type', 'description'] as const) {
@@ -244,9 +253,12 @@ export async function introspect(client: MocaClient, options: IntrospectOptions)
   for (const [key, command] of commands) command.args = argsByCommand.get(key) ?? [];
 
   return {
-    mocakitVersion: options.version,
-    generatedAt: new Date().toISOString(),
-    server: redactUrl(options.server),
-    commands: [...commands.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+    snapshot: {
+      mocakitVersion: options.version,
+      generatedAt: new Date().toISOString(),
+      server: redactUrl(options.server),
+      commands: [...commands.values()].sort((a, b) => byCodeUnit(a.name, b.name)),
+    },
+    warnings,
   };
 }

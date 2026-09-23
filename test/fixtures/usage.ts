@@ -46,6 +46,6 @@ export async function check(): Promise<void> {
   // @ts-expect-error required args cannot be null
   await moca.listOrders({ wh_id: null });
 
-  const args: ListOrdersArgs = { wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null, 'odd-name': 'x' };
+  const args: ListOrdersArgs = { wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null };
   void [qty, status, fullRows, x, eitherUnknown, firstRow, bad, args];
 }

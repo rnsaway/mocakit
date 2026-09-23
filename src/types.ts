@@ -70,9 +70,13 @@ export interface MocaConfig {
   session?: {
     /** Share cached sessions across clients with the same credentials. Default `true`. */
     reuse?: boolean;
-    /** Default 30. `0` reuses a session until the server rejects it. */
+    /** Default 30. `0` or any negative value reuses a session until the server rejects it. */
     maxAgeMinutes?: number;
-    /** Defaults to a process-wide in-memory store. */
+    /**
+     * Defaults to a process-wide in-memory store. Cannot be combined with `reuse: false`
+     * (throws `MocaArgumentError`). A persistent store holds live session keys as its values,
+     * so protect it like a credential.
+     */
     store?: SessionStore;
   };
   defaults?: ClientDefaults;

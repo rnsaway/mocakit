@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadConfig, resolveConnection } from './load-config.js';
+import { IGNORE_SSL_TRUE, loadConfig, resolveConnection } from './load-config.js';
 
 const tempDirs: string[] = [];
 const tempDir = async () => {
@@ -67,7 +67,7 @@ describe('loadConfig', () => {
   it('strips a leading BOM from JSON config and reports invalid JSON without leaking its content', async () => {
     const dir = await tempDir();
     const path = join(dir, 'bom.json');
-    await writeFile(path, `﻿${JSON.stringify({ out: 'x.ts' })}`);
+    await writeFile(path, `\uFEFF${JSON.stringify({ out: 'x.ts' })}`);
     expect((await loadConfig('bom.json', dir))?.config).toEqual({ out: 'x.ts' });
 
     const badPath = join(dir, 'bad.json');
@@ -124,6 +124,11 @@ describe('resolveConnection', () => {
     expect(
       resolveConnection({ url: 'https://c', username: 'u', password: 'p' }, { MOCA_IGNORE_SSL: value }).ignoreSslIssues,
     ).toBe(true);
+  });
+
+  it('exports the MOCA_IGNORE_SSL pattern it uses', () => {
+    expect(['1', 'yes', 'TRUE'].every((v) => IGNORE_SSL_TRUE.test(v))).toBe(true);
+    expect(['0', 'no', 'truey', ''].some((v) => IGNORE_SSL_TRUE.test(v))).toBe(false);
   });
 
   it('treats other MOCA_IGNORE_SSL values as unset', () => {

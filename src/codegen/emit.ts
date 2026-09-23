@@ -1,6 +1,7 @@
 import { classifyMocaType } from '../protocol/moca-types.js';
 import { redactUrl } from '../util/url.js';
-import { assignMethodNames, isIdentifier, toPascal } from './names.js';
+import { isMocaArgName } from '../util/text.js';
+import { assignMethodNames, byCodeUnit, commandKey, isIdentifier, toPascal } from './names.js';
 import type { Snapshot, SnapshotArg, SnapshotCommand } from './snapshot.js';
 
 export interface EmitOptions {
@@ -12,11 +13,11 @@ export interface EmitOptions {
 export interface EmitResult {
   code: string;
   warnings: string[];
+  /** Number of commands emitted, after de-duplication and skipped commands. */
+  count: number;
 }
 
 const str = (value: string): string => JSON.stringify(value);
-
-const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** Makes server text safe inside a JSDoc comment: no terminator, no tags, one line. */
 function doc(text: string): string {
@@ -46,8 +47,10 @@ function propertyName(name: string): string {
 
 /**
  * Drops repeated commands (same name ignoring case and whitespace runs), keeping the one whose name
- * sorts lowest, and repeated argument names (ignoring case), keeping the first. Returns the commands
- * sorted by name, so the output does not depend on input order.
+ * sorts lowest, and repeated argument names (ignoring case), keeping the first. Argument names that
+ * `renderCommand` would reject (not `[A-Za-z_][A-Za-z0-9_]*`) are dropped when optional; a command
+ * with such a *required* argument could never be called, so it is skipped entirely. Returns the
+ * commands sorted by name, so the output does not depend on input order.
  */
 function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: SnapshotCommand[]; warnings: string[] } {
   const warnings: string[] = [];
@@ -57,7 +60,15 @@ function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: Sn
   const kept = new Map<string, SnapshotCommand>();
   const result: SnapshotCommand[] = [];
   for (const command of sorted) {
-    const key = command.name.trim().replace(/\s+/g, ' ').toLowerCase();
+    const badRequired = command.args.find((arg) => arg.required && !isMocaArgName(arg.name));
+    if (badRequired !== undefined) {
+      warnings.push(
+        `Command ${str(command.name)} requires argument ${str(badRequired.name)}, which is not a valid MOCA argument name; skipped the command`,
+      );
+      continue;
+    }
+
+    const key = commandKey(command.name);
     const existing = kept.get(key);
     if (existing !== undefined) {
       warnings.push(`Command ${str(command.name)} duplicates ${str(existing.name)}; kept ${str(existing.name)}`);
@@ -68,6 +79,10 @@ function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: Sn
     const seenArgs = new Set<string>();
     const args: SnapshotArg[] = [];
     for (const arg of command.args) {
+      if (!isMocaArgName(arg.name)) {
+        warnings.push(`Command ${str(command.name)} argument ${str(arg.name)} is not a valid MOCA argument name; dropped the argument`);
+        continue;
+      }
       const argKey = arg.name.toLowerCase();
       if (seenArgs.has(argKey)) {
         warnings.push(`Command ${str(command.name)} lists argument ${str(arg.name)} more than once; kept the first`);
@@ -165,5 +180,5 @@ export function emit(snapshot: Snapshot, options: EmitOptions): EmitResult {
     '',
   );
 
-  return { code: lines.join('\n'), warnings };
+  return { code: lines.join('\n'), warnings, count: commands.length };
 }

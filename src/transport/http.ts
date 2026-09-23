@@ -12,7 +12,13 @@ export interface TransportRequest {
   signal?: AbortSignal;
 }
 
-/** Sends one moca-request body and resolves to the raw response text. */
+/**
+ * Sends one moca-request body and resolves to the raw response text.
+ *
+ * A custom transport sees every request body verbatim, which includes the password (in the
+ * `login user` request) and the live `SESSION_KEY` (in every other request's environment). Treat
+ * it as trusted code, and don't log request bodies.
+ */
 export type Transport = (request: TransportRequest) => Promise<string>;
 
 let insecureAgent: Agent | undefined;

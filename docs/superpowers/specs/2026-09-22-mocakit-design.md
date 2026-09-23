@@ -15,7 +15,7 @@
 
 ### Non-goals
 
-- Browser, edge, Bun or Deno support (Node 20.3+ only; `AbortSignal.any` is required).
+- Browser, edge, Bun or Deno support (Node ≥ 20.6 only; 20.6 is the first release with `--env-file`, which the README's generate workflow uses).
 - Converting MOCA names to camelCase (argument names and row keys stay exactly as MOCA reports them).
 - Inferring command output shapes by executing commands.
 - A `Result`-type / non-throwing API.
@@ -27,7 +27,7 @@
 |---|---|
 | Package name | `mocakit` |
 | Where generated code lives | In the consuming project, via `mocakit generate`. The package ships runtime + CLI only. |
-| Runtime | Node 20.3+ only; `undici` `fetch` + `Agent` for TLS-skip and timeouts |
+| Runtime | Node ≥ 20.6 only; `undici` `fetch` + `Agent` for TLS-skip and timeouts |
 | Argument rendering | `where` clause: `list orders where wh_id = 'WMD1' and ordqty = 5` |
 | Raw MOCA | `moca.exec(mocaText, opts)` escape hatch (pipes, `[SQL]`, redirects, etc.) |
 | Output typing | `MocaOutputs` registry via module augmentation, plus a per-call generic override; default `MocaRow` |
@@ -457,7 +457,7 @@ server.
 ## 12. Packaging
 
 - `package.json`: `"type": "module"`, `exports` for ESM + CJS + types, `bin: { "mocakit": "dist/cli.js" }`,
-  `engines: { node: ">=20.3" }`.
+  `engines: { node: ">=20.6" }`.
 - Build with `tsup`. TypeScript `strict`.
 - Runtime dependencies: `undici` (for the `Agent`; same major as Node's bundled version). CLI-only dependency:
   `jiti`.

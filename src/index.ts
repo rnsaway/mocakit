@@ -2,7 +2,7 @@ import type { MocaRow } from './types.js';
 
 export { MOCA_STATUS, MocaClient, type MocaClientDeps } from './client/client.js';
 export { defineCommands, type Command, type OptionalArgsCommand } from './client/commands.js';
-export { defaultDateCodec, formatMocaDate, parseMocaDate, type DateCodec } from './dates/codec.js';
+export { formatMocaDate, parseMocaDate } from './dates/codec.js';
 export { defineConfig, type MocakitConfig } from './define-config.js';
 export {
   MocaArgumentError,
@@ -12,9 +12,6 @@ export {
   MocaProtocolError,
   MocaTransportError,
   isMocaStatus,
-  redactArgs,
-  redactCommand,
-  type MocaErrorOptions,
 } from './errors.js';
 export { MemorySessionStore, sharedSessionStore, type SessionState, type SessionStore } from './session/store.js';
 export { httpTransport, type Transport, type TransportRequest } from './transport/http.js';

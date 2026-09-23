@@ -1,15 +1,14 @@
 import type { DateCodec } from '../dates/codec.js';
 import { MocaArgumentError } from '../errors.js';
 import type { CommandSpec, MocaArgValue } from '../types.js';
-
-const ARG_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+import { isMocaArgName } from '../util/text.js';
 
 export function quoteMocaString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
 function checkName(name: string): string {
-  if (!ARG_NAME.test(name)) throw new MocaArgumentError(`Invalid argument name "${name}"`, name);
+  if (!isMocaArgName(name)) throw new MocaArgumentError(`Invalid argument name "${name}"`, name);
   return name;
 }
 

@@ -7,6 +7,9 @@ const snapshot = JSON.parse(
   readFileSync(new URL('../../test/fixtures/snapshot.json', import.meta.url), 'utf8'),
 ) as Snapshot;
 
+const ODD_NAME_WARNING =
+  'Command "list orders" argument "odd-name" is not a valid MOCA argument name; dropped the argument';
+
 describe('emit', () => {
   const { code, warnings } = emit(snapshot, { version: '0.1.0' });
 
@@ -21,13 +24,13 @@ describe('emit', () => {
     expect(code).toContain('  ordqty?: number | null;');
     expect(code).toContain('  adddte?: string | Date | null;');
     expect(code).toContain('  cancel_flg?: boolean | null;');
-    expect(code).toContain('  "odd-name"?: string | null;');
+    expect(code).not.toContain('odd-name');
     expect(code).toContain('  /** Warehouse (S) */');
   });
 
   it('emits the spec table', () => {
     expect(code).toContain(
-      `  listOrders: ["list orders", [["ordnum", "S", 0], ["wh_id", "S", 1], ["ordqty", "I", 0], ["adddte", "D", 0], ["cancel_flg", "O", 0], ["odd-name", "S", 0]]],`,
+      `  listOrders: ["list orders", [["ordnum", "S", 0], ["wh_id", "S", 1], ["ordqty", "I", 0], ["adddte", "D", 0], ["cancel_flg", "O", 0]]],`,
     );
   });
 
@@ -47,7 +50,10 @@ describe('emit', () => {
     expect(code).toContain('  cmdExec: mk.OptionalArgsCommand<mk.NoArgs, "exec">;');
     expect(code).toContain('  listOrders_2: mk.OptionalArgsCommand<mk.NoArgs, "list-orders">;');
     expect(code).toContain('Lists *\\/ active commands');
-    expect(warnings).toEqual(['Commands "list orders", "list-orders" map to the same method name; generated listOrders, listOrders_2']);
+    expect(warnings).toEqual([
+      ODD_NAME_WARNING,
+      'Commands "list orders", "list-orders" map to the same method name; generated listOrders, listOrders_2',
+    ]);
   });
 
   it('exports the command-name union and is deterministic', () => {
@@ -86,6 +92,7 @@ describe('emit', () => {
     expect(forward.warnings).toEqual([
       'Command "EXEC" duplicates " exec "; kept " exec "',
       'Command "exec" duplicates " exec "; kept " exec "',
+      ODD_NAME_WARNING,
       'Commands "list orders", "list-orders" map to the same method name; generated listOrders, listOrders_2',
     ]);
   });
@@ -139,5 +146,41 @@ describe('emit', () => {
       { version: '0.1.0' },
     );
     expect(result.code).toContain('  "__proto__"?: string | null;');
+  });
+
+  it('returns the number of commands it emitted', () => {
+    expect(emit(snapshot, { version: '0.1.0' }).count).toBe(5);
+    const withDuplicate = { ...snapshot, commands: [...snapshot.commands, { name: 'EXEC', args: [] }] };
+    expect(emit(withDuplicate, { version: '0.1.0' }).count).toBe(5);
+  });
+
+  it('skips a command whose required argument name is not a valid MOCA argument name, and warns', () => {
+    const result = emit(
+      {
+        ...snapshot,
+        commands: [
+          { name: 'bad required', args: [{ name: 'wh-id', dtype: 'S', required: true }] },
+          { name: 'good', args: [{ name: 'wh_id', dtype: 'S', required: true }] },
+        ],
+      },
+      { version: '0.1.0' },
+    );
+    expect(result.code).not.toContain('bad required');
+    expect(result.code).not.toContain('badRequired');
+    expect(result.code).toContain('  good: ["good", [["wh_id", "S", 1]]],');
+    expect(result.code).toMatch(/— 1 commands\./);
+    expect(result.count).toBe(1);
+    expect(result.warnings).toEqual([
+      'Command "bad required" requires argument "wh-id", which is not a valid MOCA argument name; skipped the command',
+    ]);
+  });
+
+  it('drops an optional argument whose name is not a valid MOCA argument name, including $-names', () => {
+    const result = emit(
+      { ...snapshot, commands: [{ name: 'c', args: [{ name: '$x', dtype: 'S', required: false }, { name: 'y', dtype: 'S', required: false }] }] },
+      { version: '0.1.0' },
+    );
+    expect(result.code).toContain('  c: ["c", [["y", "S", 0]]],');
+    expect(result.warnings).toEqual(['Command "c" argument "$x" is not a valid MOCA argument name; dropped the argument']);
   });
 });

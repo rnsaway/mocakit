@@ -7,13 +7,17 @@ export interface MocaErrorOptions {
   cause?: unknown;
 }
 
-const PASSWORD_KEY_PATTERN = /pswd|passw(?:or)?d/i;
+/** Argument/column names treated as secrets: anything containing `pswd`, `pwd`, `passwd` or
+ * `password`, case-insensitively. */
+const PASSWORD_KEY_PATTERN = /pswd|pwd|passw(?:or)?d/i;
 
+/** `<key> = <value>`, where `<key>` matches `PASSWORD_KEY_PATTERN` and `<value>` is a single- or
+ * double-quoted MOCA string or an unquoted token (a number, `@var`, a bare word). */
+const PASSWORD_ASSIGNMENT = /(\b\w*(?:pswd|pwd|passw(?:or)?d)\w*\s*=\s*)('(?:[^']|'')*'|"(?:[^"]|"")*"|[^\s'"]+)/gi;
+
+/** Replaces the value of every password-like `key = value` in MOCA text with `'***'`. */
 export function redactCommand(command: string): string {
-  return command.replace(
-    /(\b\w*(?:pswd|passw(?:or)?d)\w*\s*=\s*)('(?:[^']|'')*'|"(?:[^"]|"")*")/gi,
-    "$1'***'",
-  );
+  return command.replace(PASSWORD_ASSIGNMENT, "$1'***'");
 }
 
 export function redactArgs(args: Readonly<Record<string, unknown>>): Record<string, unknown> {
