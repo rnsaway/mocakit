@@ -230,6 +230,41 @@ describe('runCli .env loading', () => {
     expect(err.at(-1)).toMatch(/^mocakit: Cannot read env file .*\.env: E[A-Z]+$/);
   });
 
+  it('loads a .env that starts with a BOM and uses CRLF line endings', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, '.env'), `﻿${DOTENV.replace(/\n/g, '\r\n')}`);
+    const fake = fakeServer();
+    const { io, out } = capture();
+    expect(await runCli(['generate', '--out', 'moca.ts', '--verbose'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
+    expect(out[0]).toBe(`Loaded 3 variables from ${join(dir, '.env')}: MOCA_PASSWORD, MOCA_URL, MOCA_USER`);
+    expect(fake.requests[0]?.url).toMatch(/^https:\/\/file\.moca\.test\/service/);
+    expect(fake.requests[0]?.query).toBe(`login user where usr_id = 'fileuser' and usr_pswd = '${PASSWORD}'`);
+  });
+
+  it('restores process.env when loading the config throws', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, '.env'), DOTENV);
+    await writeFile(join(dir, 'mocakit.config.ts'), "throw new Error('config exploded');\nexport default {};\n");
+    const { io, err } = capture();
+    expect(await runCli(['generate', '--from-snapshot', fixture], io, dir)).toBe(1);
+    expect(err.at(-1)).toMatch(/config exploded/);
+    for (const name of ['MOCA_URL', 'MOCA_USER', 'MOCA_PASSWORD']) expect(process.env[name]).toBeUndefined();
+  });
+
+  it('restores process.env when generate fails (login rejected)', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, '.env'), DOTENV);
+    vi.stubEnv('MOCA_USER', 'realuser');
+    const fake = fakeMoca(() => mocaXml(523, {}, 'Invalid user ID or password'));
+    const { io, err } = capture();
+    expect(await runCli(['generate', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } })).toBe(1);
+    expect(err.at(-1)).toMatch(/^mocakit: /);
+    expect(err.join('\n')).not.toContain(PASSWORD);
+    expect(process.env.MOCA_URL).toBeUndefined();
+    expect(process.env.MOCA_PASSWORD).toBeUndefined();
+    expect(process.env.MOCA_USER).toBe('realuser');
+  });
+
   it('documents the env-file flags in the usage text', async () => {
     const { io, out } = capture();
     await runCli(['--help'], io);

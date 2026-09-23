@@ -39,6 +39,7 @@ export async function loadEnvFile(path: string, options: { optional?: boolean } 
  * define (the real environment wins, as with `node --env-file`), so a `mocakit.config.ts`
  * that reads `process.env` sees them. Returns a function that removes exactly the names it
  * added, leaving `process.env` as it was.
+ * Not safe for concurrent `runCli` calls in one process (they share `process.env`); fine for the CLI and sequential tests.
  */
 export function exposeOnProcessEnv(vars: Record<string, string>): () => void {
   const added: string[] = [];

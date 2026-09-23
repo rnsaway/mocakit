@@ -23,6 +23,10 @@ install, so no prebuilt files need to be committed:
 npm install "git+https://<git-host>/<owner>/mocakit.git#<branch-or-tag>"
 ```
 
+npm 11 may print an advisory warning that mocakit's `prepare` script (`npm run build`) is "not yet covered by
+allowScripts". That's expected, and the build still runs. If a future npm blocks it, approve it with
+`npm install-scripts approve mocakit` and reinstall.
+
 ## Generate a typed client
 
 `mocakit generate` introspects a live MOCA instance (`list active commands` and `list active command arguments`)
@@ -88,6 +92,17 @@ script's. Use `npm run moca -- generate` or `npm run moca:generate`.
   secrets take precedence over a stray `.env`.
 - A `mocakit.config.ts` that reads `process.env.MOCA_URL` (etc.) sees the `.env` values too: the CLI exposes the
   file's variables on `process.env` while it runs (only those not already set), and removes them afterwards.
+
+**`.env` format notes.**
+
+- Quote any value that contains `#`, spaces or quotes. `#` starts a comment, so an unquoted
+  `MOCA_PASSWORD=abc#123` is read as `abc`; write `MOCA_PASSWORD="abc#123"`.
+- The file is parsed by Node's `util.parseEnv` (the same parser as `node --env-file`), not the `dotenv` package:
+  - there is no `${VAR}` expansion; the text is taken literally;
+  - a repeated key keeps the last value;
+  - escape handling inside quotes can differ from `dotenv`, so avoid backslashes in single-quoted values.
+- A variable that is set but empty in your shell (`MOCA_PASSWORD=`) still counts as set, so it overrides the file.
+  Unset it (`unset MOCA_PASSWORD`) if you want the file's value.
 
 This writes `src/moca.generated.ts` and, next to it, a `src/moca.commands.json` snapshot. **Commit both files.**
 The snapshot lets you regenerate without contacting the server — for example in CI, or after only changing
