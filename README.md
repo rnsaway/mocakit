@@ -51,6 +51,10 @@ The snapshot lets you regenerate without contacting the server — for example i
 npx mocakit generate --from-snapshot src/moca.commands.json
 ```
 
+If the server's commands haven't changed since the last run, the existing snapshot is left byte-for-byte untouched
+(no `generatedAt` churn). The final `Wrote N commands` line counts the commands actually emitted, and anything the
+generator had to skip or adjust is printed to stderr as a `warning: …` line (see [Method names](#method-names)).
+
 Other flags: `--config <path>` (default: `mocakit.config.{ts,mts,mjs,js,json}` in the cwd), `--out <path>`,
 `--dry-run` (introspect/report without writing). Run `mocakit generate --help` for the full list.
 
@@ -100,10 +104,25 @@ const full = await moca.listOrders({ wh_id: 'WMD1' }, { format: 'full' });
 const raw = await moca.exec("[select count(*) cnt from ord]");
 ```
 
+### Method names
+
 Method names come from the MOCA command name, split on whitespace/punctuation and camelCased: `list orders` →
-`listOrders`. A name that would collide with a client member (`exec`, `call`, `login`, `logout`, `session`, `then`,
-…) gets a `cmd` prefix instead (e.g. a command literally named `login` becomes `cmdLogin`). Two commands that
-camelCase to the same name get `_2`, `_3`, … suffixes, and `mocakit generate` prints a warning when that happens.
+`listOrders`. A name that would collide with a client member (`exec`, `call`, `login`, `logout`, `session`,
+`constructor`, `then`, or any `Object.prototype` name such as `toString`) gets a `cmd` prefix instead (e.g. a command
+literally named `login` becomes `cmdLogin`). Two commands that camelCase to the same name get `_2`, `_3`, …
+suffixes, and `mocakit generate` prints a warning when that happens. Argument interfaces are named after the method
+(`listOrders` → `ListOrdersArgs`, `listOrders_2` → `ListOrders_2Args`); commands without arguments use `mk.NoArgs`.
+
+The generator also warns and adjusts, rather than emitting code that can't work:
+
+- Commands that differ only in case/whitespace are emitted once (the lowest-sorting name wins).
+- A command name containing anything other than letters, digits, `_`, space, `.` and `-` is skipped (a snapshot
+  containing one is rejected).
+- An optional argument whose name isn't a valid MOCA argument name (`[A-Za-z_][A-Za-z0-9_]*`) is dropped; a
+  command with such a *required* argument is skipped entirely, since it could never be called.
+
+If you run a generated file against a *newer* mocakit that has added a client member with the same name as one of
+your commands, that command isn't installed (the client member wins) and a process warning tells you to regenerate.
 
 ### Client config
 
@@ -115,11 +134,11 @@ Besides `url`/`username`/`password`, `createMoca`/`MocaConfig` also accepts:
 | `device` | — | Sent as `DEVCOD` |
 | `locale` | login locale | Sent as `LOCALE_ID` |
 | `ignoreSslIssues` | `false` | Skip TLS verification |
-| `timeoutMs` | `300000` | Per HTTP request |
+| `timeoutMs` | `300000` | Per HTTP request (must be > 0 and at most 2147483647) |
 | `session` | see [Sessions](#sessions) | `{ reuse?, maxAgeMinutes?, store? }` |
 | `defaults` | — | Client-wide call defaults: `{ convert?, noRowsIsError?, autocommit? }` |
 
-`createMoca(config, deps)` also takes an optional second argument, `{ transport?, now? }`, mainly for tests. A custom
+`createMoca(config, deps?)` also takes an optional second argument, `{ transport?, now? }`, mainly for tests. A custom
 `transport` receives every request body verbatim — including the **password** (in the `login user` request) and
 the live **`SESSION_KEY`** (in every other request) — so only plug in code you trust, and never log its bodies.
 
@@ -137,7 +156,9 @@ Arguments are rendered into a MOCA `where` clause (`list orders where wh_id = 'W
 - `Date` values are sent as a quoted 14-digit string, `YYYYMMDDHH24MISS`, in the local time zone:
   `new Date(2026, 8, 22, 14, 5, 9)` → `'20260922140509'`. An invalid `Date` (e.g. `new Date('nope')`) throws
   `MocaArgumentError`.
-- Arguments not declared on the command go through `{ extraArgs: { ... } }`.
+- Arguments not declared on the command go through `{ extraArgs: { ... } }` (generated methods and `call` only —
+  `exec` throws `MocaArgumentError` if given a non-empty `extraArgs`, rather than silently dropping a filter from
+  raw MOCA text; put the arguments in the text itself).
 - **Argument names must use the declared spelling.** A different casing of a declared name throws
   `MocaArgumentError` naming the correct spelling, and a case-insensitive duplicate within `extraArgs` also
   throws — MOCA's own case-insensitivity is used to catch these mistakes, not to accept them silently.
@@ -153,7 +174,7 @@ Every call (`exec`, `call`, and every generated method) accepts:
 | `noRowsIsError` | `false` | Status 510 throws instead of returning `[]` |
 | `autocommit` | `true` | The `moca-request autocommit` attribute |
 | `env` | — | Extra/override environment vars for this call only (can't override `USR_ID`/`SESSION_KEY`) |
-| `extraArgs` | — | Undeclared arguments, appended to the `where` clause |
+| `extraArgs` | — | Undeclared arguments, appended to the `where` clause (not supported by `exec`) |
 | `signal` | — | Aborts the HTTP request |
 
 ## Typing outputs
@@ -205,11 +226,11 @@ Everything throws a subclass of `MocaError` (`message`, `status`, `command`, `ar
 
 | Error | When | Extra fields |
 |---|---|---|
-| `MocaCommandError` | Server status ≠ 0 (and ≠ 510 unless `noRowsIsError`) | `serverMessage`, `result` |
+| `MocaCommandError` | Server status ≠ 0 (and ≠ 510 unless `noRowsIsError`), including a failed `logout user` | `serverMessage`, `result` |
 | `MocaAuthError` | Login failed, returned no `session_key`, or a second 523 right after re-login | — |
-| `MocaTransportError` | Network, TLS, timeout, abort, non-2xx HTTP, or empty body | `cause`, `httpStatus?` |
+| `MocaTransportError` | Invalid service URL, credentials embedded in the URL, network, TLS, timeout, abort, redirect, non-2xx HTTP, or empty body | `cause`, `httpStatus?` |
 | `MocaProtocolError` | Response body isn't parseable as `moca-response` | `rawSnippet` |
-| `MocaArgumentError` | Missing/invalid required argument, bad number, invalid argument name | `argument` |
+| `MocaArgumentError` | Missing required argument, unknown/mis-cased argument, invalid argument name, unrenderable number/`Date`/value, `USR_ID`/`SESSION_KEY` in `opts.env`, a character XML 1.0 forbids in the query or environment, `extraArgs` on `exec`, or an invalid client config (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `session.store` with `reuse: false`) | `argument` |
 
 ```ts
 import { isMocaStatus } from 'mocakit';
@@ -223,10 +244,10 @@ try {
 ```
 
 - **Values are redacted** in `error.command` (the rendered MOCA text), `error.args`, and the error's own
-  `toJSON()` (so `JSON.stringify(error)` is safe too) — but only for arguments whose *name* contains `pswd`,
-  `passwd` or `password` (case-insensitive), which covers the login command and any command with a similarly
-  named argument. This is not a general secret scanner: a secret passed under a differently named argument is
-  not redacted.
+  `toJSON()` (so `JSON.stringify(error)` is safe too), on every error — but only for arguments whose *name*
+  contains `pswd`, `pwd`, `passwd` or `password` (case-insensitive), whether the value is quoted or a bare token.
+  That covers the login command and any command with a similarly named argument. This is not a general secret
+  scanner: a secret passed under a differently named argument is not redacted.
 - **No automatic retries** of commands, since they can have side effects — the one exception is a single retry
   after a 523 (session expired), which re-logs in and resends exactly once. A second 523 throws `MocaAuthError`.
 - `USR_ID` and `SESSION_KEY` cannot be overridden via `opts.env` on a per-call basis — that would let a caller
@@ -237,7 +258,7 @@ try {
 Sessions are logged in lazily on first use, cached in memory keyed by URL + username + password, and shared
 across every `MocaClient` built with those same credentials in the process (concurrent callers needing a login
 share a single in-flight request). By default a session is reused for 30 minutes
-(`session: { maxAgeMinutes: 30 }`; `0` means reuse until the server itself rejects it).
+(`session: { maxAgeMinutes: 30 }`; `0` or any negative value means reuse until the server itself rejects it).
 
 ```ts
 createMoca({ ...connection, session: { reuse: false } });     // this client's own private session
@@ -252,8 +273,8 @@ like a credential. A `store` can't be combined with `reuse: false` (that throws 
 keys (or re-hash them with a secret) — anyone who can read a key and knows the URL/username could otherwise
 brute-force a short password offline.
 
-Call `await moca.login()` to fail fast at startup instead of on the first real request, and `await moca.logout()`
-to end the session. `logout()` evicts the cached session even if the server-side logout call itself fails (the
+Call `await moca.login()` to fail fast at startup instead of on the first real request (it resolves to the login
+row, without the `session_key` column), and `await moca.logout()` to end the session. `logout()` evicts the cached session even if the server-side logout call itself fails (the
 error is still rethrown after the eviction). With the default `session.reuse: true`, `logout()` ends the session
 for **every** client sharing those credentials, not just the one you called it on.
 

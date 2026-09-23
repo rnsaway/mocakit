@@ -1,7 +1,7 @@
 # mocakit — Typed TypeScript SDK for MOCA
 
 **Date:** 2026-09-22
-**Status:** Draft for review
+**Status:** Implemented (pending live-server confirmation)
 
 ## 1. Purpose
 
@@ -15,7 +15,8 @@
 
 ### Non-goals
 
-- Browser, edge, Bun or Deno support (Node ≥ 20.6 only; 20.6 is the first release with `--env-file`, which the README's generate workflow uses).
+- Browser, edge, Bun or Deno support. Node ≥ 20.6 only (the first release with `--env-file`, which the README's
+  generate workflow uses).
 - Converting MOCA names to camelCase (argument names and row keys stay exactly as MOCA reports them).
 - Inferring command output shapes by executing commands.
 - A `Result`-type / non-throwing API.
@@ -89,27 +90,42 @@ falling back to column position 5), and `locale_id` from row 0 (fallback positio
 
 ```
 src/
-  protocol/   xml.ts, request.ts, response.ts, convert.ts   pure; no I/O
+  protocol/   xml.ts, request.ts, response.ts, convert.ts,   pure; no I/O
+              moca-types.ts
   transport/  http.ts                                        fetch + undici Agent; returns raw text
-  session/    session-manager.ts, store.ts                   login, cache, single-flight, 523 recovery
-  client/     client.ts, render.ts                            MocaClient, where-clause rendering
-  errors.ts, types.ts                                        shared by every layer
-  codegen/    introspect.ts, snapshot.ts, names.ts, emit.ts  introspection + TS emission
+  session/    session-manager.ts, store.ts                   cache, freshness, single-flight login
+  client/     client.ts, render.ts, commands.ts              MocaClient (incl. 523 recovery), where-clause
+                                                             rendering, Command types + defineCommands
+  codegen/    introspect.ts, snapshot.ts, filter.ts,         introspection, snapshot I/O, include/exclude/
+              names.ts, emit.ts                              levels filters, naming, TS emission
   dates/      codec.ts                                       formatMocaDate, parseMocaDate, DateCodec (§8a)
-  config.ts                                                  defineConfig + config loading
-  cli.ts                                                     `mocakit generate`
+  util/       url.ts, text.ts                                redactUrl; BOM stripping, arg-name rule
+  cli/        main.ts, generate.ts, load-config.ts           argv parsing, `generate`, config loading
+  cli.ts                                                     bin entry (`mocakit`)
+  define-config.ts                                           defineConfig + MocakitConfig
+  errors.ts, types.ts, version.ts                            shared by every layer
   index.ts                                                   public exports
 ```
 
 Each unit has one job and can be tested in isolation:
 
-- **protocol**: `buildRequest(query, env, autocommit = true) → string`, `parseResponse(xml) → RawResult`
-  (`{ status, message, columns, rows }` with string/null/nested values), `convertRow(columns, row)`.
-- **transport**: `send(body, { url, timeoutMs, ignoreSslIssues }) → Promise<string>`. Throws `MocaTransportError`
-  on network/TLS/timeout, non-2xx HTTP status, or empty body. Swappable in tests via the `Transport` interface.
-- **session**: `SessionManager.run(fn)` supplies a valid session to `fn`, handling cache, login and 523 retry.
-- **client**: `MocaClient` exposes `exec`, `call`, `login`, `logout`, `session`.
-- **codegen**: `introspect(client) → Snapshot`, `emit(snapshot, options) → string`.
+- **protocol**: `buildRequest(query, env, autocommit = true) → string`, `parseResponse(xml) → RawResponse`
+  (`{ status, message, columns, rows }` with string/null/nested values), `toRows(set, convert) → MocaRow[]`,
+  `classifyMocaType(code)`.
+- **transport**: `type Transport = (request: TransportRequest) => Promise<string>`, where `TransportRequest` is
+  `{ url, body, timeoutMs, ignoreSslIssues, signal? }`. `httpTransport` throws `MocaTransportError` on an invalid
+  URL, credentials in the URL, network/TLS/timeout/abort, a redirect, a non-2xx HTTP status, or an empty body.
+  Swappable via `MocaClientDeps.transport`. A custom transport receives request bodies containing the password (at
+  login) and the live `SESSION_KEY` (every other request).
+- **session**: `SessionManager` exposes `acquire()` (fresh session from memory, the store, or a single-flight
+  login), `peek()` (cached fresh session or `null`, never logs in), `adopt(state)` (store an explicitly obtained
+  session) and `invalidate(stale)` (compare-then-delete). 523 handling lives in `MocaClient`, not here.
+- **client**: `MocaClient` exposes `exec`, `call`, `login`, `logout`, `session`. `defineCommands(proto, specs)`
+  installs generated methods.
+- **codegen**: `introspect(client, options) → Promise<{ snapshot, warnings }>`,
+  `emit(snapshot, options) → { code, warnings, count }`, `filterCommands(commands, filter)`,
+  `readSnapshot`/`writeSnapshot`.
+- **cli**: `runCli(argv, io?, cwd?) → exit code`, `runGenerate(options)`, `loadConfig`, `resolveConnection`.
 
 ## 5. Client API
 
@@ -144,10 +160,10 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
 | `device` | `string?` | — | Sent as `DEVCOD` |
 | `locale` | `string?` | login locale | Sent as `LOCALE_ID` |
 | `ignoreSslIssues` | `boolean` | `false` | Uses an undici `Agent` with `rejectUnauthorized: false` |
-| `timeoutMs` | `number` | `300000` | Per HTTP request |
+| `timeoutMs` | `number` | `300000` | Per HTTP request; must be > 0 and ≤ 2147483647 |
 | `session.reuse` | `boolean` | `true` | Share cached sessions across clients with the same credentials |
-| `session.maxAgeMinutes` | `number` | `30` | `0` = reuse until the server rejects it |
-| `session.store` | `SessionStore?` | in-memory | See §7 |
+| `session.maxAgeMinutes` | `number` | `30` | `0` or negative = reuse until the server rejects it; must be finite |
+| `session.store` | `SessionStore?` | in-memory | See §7. Combining it with `reuse: false` throws `MocaArgumentError` |
 | `defaults` | `{ convert?, noRowsIsError?, autocommit? }` | see below | Client-wide call defaults. `format` is per call only, so return types stay statically known. |
 
 ### `CallOptions`
@@ -159,17 +175,25 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
 | `noRowsIsError` | `boolean` | `false` | Status 510 throws `MocaCommandError` instead of returning `[]` |
 | `autocommit` | `boolean` | `true` | `moca-request autocommit` attribute |
 | `env` | `Record<string, string>` | — | Extra/override environment vars for this call |
-| `extraArgs` | `Record<string, MocaArgValue>` | — | Undeclared arguments appended to the `where` clause |
+| `extraArgs` | `Record<string, MocaArgValue>` | — | Undeclared arguments appended to the `where` clause (`call` and generated methods only; `exec` rejects it) |
 | `signal` | `AbortSignal` | — | Aborts the HTTP request |
 
 ### Methods
 
-- `exec<T = MocaRow>(moca: string, opts?)`: sends raw MOCA text. The caller is responsible for quoting.
+- `exec<T = MocaRow>(moca: string, opts?)`: sends raw MOCA text. The caller is responsible for quoting. A
+  non-empty `opts.extraArgs` throws `MocaArgumentError` (`extraArgs is not supported by exec(); …`) rather than
+  being silently dropped from a command that may have side effects.
 - `call<T>(spec, args, opts?)`: used by generated functions; validates, renders, executes.
-- `login()`: forces a login now (fail fast); returns the login row.
+- `login()`: forces its own login now (fail fast, bypassing single-flight) and stores the new session; returns the
+  login row converted per `defaults.convert`, with any `session_key` column (case-insensitive) removed.
 - `logout()`: sends `logout user`, then evicts the cached session. The session is evicted even if the
-  server call fails, and the error is then rethrown.
+  server call fails, and the error is then rethrown. It acts only on an already-cached session (not an in-flight
+  login), and with `reuse: true` it ends the session for every client sharing those credentials.
 - `session`: read-only `{ active: boolean; locale: string | null; ageMs: number | null }`. The key is never exposed.
+
+The constructor throws `MocaArgumentError` for a blank (or non-string) `url`/`username`/`password`, a non-finite
+`maxAgeMinutes`, an out-of-range `timeoutMs`, or `session.store` combined with `session.reuse: false`.
+`createMoca(config, deps?)` / `new MocaClient(config, deps?)` take optional `MocaClientDeps` (`{ transport?, now? }`).
 
 ## 6. Argument rendering
 
@@ -203,9 +227,11 @@ Rules:
 
 - **Cache key:** `sha256(JSON.stringify([url, username, password]))`. It is unsalted, so persistent stores must
   protect their keys.
-- **Default store:** a module-level `Map` shared by every client in the process. `session.reuse: false` gives a
-  client a private, uncached session that lives only as long as the client.
-- **`SessionStore` interface** (pluggable, e.g. file- or Redis-backed; only the in-memory store ships):
+- **Default store:** a module-level store shared by every client in the process. `session.reuse: false` gives a
+  client a private, uncached session that lives only as long as the client; it cannot be combined with
+  `session.store` (`MocaArgumentError`).
+- **`SessionStore` interface** (pluggable, e.g. file- or Redis-backed; only the in-memory store ships). A
+  persistent store holds live session keys as its values, so it must protect them like credentials:
 
   ```ts
   interface SessionState { key: string; locale: string | null; createdAt: number }
@@ -216,16 +242,25 @@ Rules:
   }
   ```
 
-- **Freshness:** a cached state older than `maxAgeMinutes` is deleted and replaced before use. The check happens
-  before sending, never after.
-- **Single-flight:** concurrent callers that need a login share one in-flight login promise per cache key. A
-  failed login is not cached, and the in-flight entry is cleared when it settles.
-- **Lazy login:** the first call logs in. `moca.login()` logs in eagerly.
-- **523 recovery:** on status 523 the session manager evicts the key, logs in again (single-flight), and retries
-  the command exactly once. A second 523 throws `MocaAuthError`.
+- **Freshness:** a cached state older than `maxAgeMinutes` is not used; the client logs in again. The stale entry
+  is not deleted (the read may already be out of date, and deleting could destroy a newer session another client
+  stored); the next successful login overwrites it. The check happens before sending, never after.
+  `maxAgeMinutes <= 0` (zero or negative) disables age-based expiry: a session is reused until the server rejects it.
+- **Single-flight:** concurrent callers that need a login share one in-flight login promise per store and cache
+  key, across every `SessionManager` using that store (so across clients too). Just before logging in, the
+  single-flight re-checks the store, in case another process sharing it has already stored a fresh session. A
+  failed login is not cached, and the in-flight entry is cleared when it settles. Whichever client starts the
+  login runs it with its own settings (transport, timeout).
+- **Abort while waiting:** a caller whose `signal` aborts while it waits for a shared login rejects promptly with
+  `MocaTransportError`, but the shared login itself is not cancelled. An already-aborted signal never starts a
+  login.
+- **Lazy login:** the first call logs in. `moca.login()` logs in eagerly (always its own request).
+- **523 recovery (in `MocaClient`):** on status 523 the client invalidates that session (compare-then-delete, so a
+  newer session stored by another client survives), checks the caller's `signal`, acquires a fresh session
+  (single-flight) and retries the command exactly once. A second 523 invalidates again and throws `MocaAuthError`.
 - **Environment:** every request sends `USR_ID`, `SESSION_KEY`, and `WH_ID`/`DEVCOD`/`LOCALE_ID` when set
-  (`LOCALE_ID` falls back to the login locale). `opts.env` merges on top, except that `USR_ID` and `SESSION_KEY` cannot be
-  overridden (`MocaArgumentError`).
+  (`LOCALE_ID` falls back to the login locale). `opts.env` merges on top, except that `USR_ID` and `SESSION_KEY`
+  cannot be overridden (case-insensitive; `MocaArgumentError`).
 
 ## 8. Response format
 
@@ -240,15 +275,15 @@ Rules:
 
   | MOCA column type | JS value |
   |---|---|
-  | `I`, `L`, `F`, `N`, `INTEGER`, `LONG`, `FLOAT`, `NUMBER` | `number` when the text is a finite decimal; integers beyond `Number.MAX_SAFE_INTEGER` and other text stay strings |
-  | `O`, `BOOLEAN` | `boolean` (`1`/`true` → `true`, `0`/`false` → `false`) |
-  | `D`, `DATE`, `DATETIME` | `string` (unchanged MOCA date string) |
+  | `I`, `L`, `F`, `N`, `J`, `INTEGER`, `LONG`, `FLOAT`, `DOUBLE`, `NUMBER`, `NUMERIC` | `number` when the text is a finite decimal (optional sign and exponent); integers beyond `Number.MAX_SAFE_INTEGER` and other text stay strings |
+  | `O`, `BOOLEAN`, `BOOL` | `boolean` (`1`/`true` → `true`, `0`/`false` → `false`, case-insensitive, trimmed); other text stays a string |
+  | `D`, `DATE`, `DATETIME`, `TIMESTAMP` | `string` (unchanged MOCA date string) |
   | nested `moca-results` | `MocaRow[]` (recursively converted) |
   | anything else | `string` |
   | NULL field | `null` |
 
-  The exact type code table is verified against a live server during implementation. Unknown codes fall back to
-  string.
+  Codes are matched case-insensitively after trimming. The same classification drives the dtype → TS mapping in
+  §11. The table is still to be confirmed against a live server (§14); unknown codes fall back to string.
 - `convert: false` leaves every value as `string | null` or nested rows.
 - Status 510 returns `[]` unless `noRowsIsError` is set.
 - `parseMocaDate(s: string): Date` is exported as a helper (§8a).
@@ -303,7 +338,8 @@ changes.
 - Converting date columns to `Date` (or `Temporal.PlainDateTime` once Node ships Temporal), with typed output.
 - Date-only values (`YYYYMMDD`) and other formats, such as partial timestamps from custom commands.
 - Accepting ISO strings or `Temporal` values as date arguments.
-- A custom `DateCodec` supplied by the user.
+- A custom `DateCodec` supplied by the user. (`DateCodec` and the default codec are internal in v1 and not exported;
+  only `formatMocaDate` and `parseMocaDate` are public.)
 
 ## 9. Output typing
 
@@ -323,8 +359,9 @@ declare module 'mocakit' {
 type Output<C extends string> = C extends keyof MocaOutputs ? MocaOutputs[C] : MocaRow;
 ```
 
-Every generated function is generic, `<T = Output<'list orders'>>`, so a call site can also override the type:
-`moca.listOrders<MyOrder>({ ... })`. These are type-only assertions and nothing checks them at runtime.
+Every generated method is generic through `mk.Command`/`mk.OptionalArgsCommand` (`<T = Output<'list orders'>>`,
+wrapped in `NoInfer`), so a call site can also override the type explicitly: `moca.listOrders<MyOrder>({ ... })`.
+These are type-only assertions and nothing checks them at runtime.
 
 ## 10. Error handling
 
@@ -332,21 +369,25 @@ All command failures throw; there is no non-throwing variant.
 
 | Class (extends `MocaError`) | Raised when | Extra fields |
 |---|---|---|
-| `MocaCommandError` | server status ≠ 0 (and ≠ 510 unless `noRowsIsError`) | `status`, `serverMessage`, `result` (partial `MocaResult` if any) |
-| `MocaAuthError` | login returned status ≠ 0, login returned no `session_key`, or a second 523 after re-login | `status` |
-| `MocaTransportError` | network/TLS/timeout/abort, HTTP non-2xx, empty body | `cause`, `httpStatus?` |
+| `MocaCommandError` | server status ≠ 0 (and ≠ 510 unless `noRowsIsError`); also a failed `logout user` (other than 523) | `status`, `serverMessage`, `result` (partial `MocaResult` if any) |
+| `MocaAuthError` | login returned status ≠ 0, login returned no `session_key`, or a second 523 right after re-login | `status` |
+| `MocaTransportError` | invalid service URL, credentials embedded in the URL, network/TLS/timeout/abort, redirect, HTTP non-2xx, empty body | `cause`, `httpStatus?` |
 | `MocaProtocolError` | body is not parseable as a moca-response | `rawSnippet` (first 500 chars) |
-| `MocaArgumentError` | missing required arg, invalid number, invalid arg name | `argument` |
+| `MocaArgumentError` | missing/`null` required arg; unknown arg or wrong casing of a declared one; duplicate `extraArgs` key; invalid arg name; unrenderable number, invalid `Date` or unsupported value type; `USR_ID`/`SESSION_KEY` env override; a character not allowed in XML 1.0 in the query or environment; invalid `MocaConfig` (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `store` with `reuse: false`); `extraArgs` passed to `exec` | `argument` |
 
-`MocaError` base fields: `message`, `status` (`-1` for non-server errors), `command` (rendered MOCA text, with
-the password redacted for login), `args`.
+`MocaError` base fields: `message`, `status` (`-1` for non-server errors), `command` (the MOCA text that was, or
+would have been, sent), `args`, and `toJSON()` (so `JSON.stringify(error)` includes those fields).
 
 Policies:
 
 - **No automatic retries** of commands other than the single post-523 retry, because commands can have side
   effects.
-- **Credentials are never logged or put in error messages.** The login query in `command` is redacted to
-  `usr_pswd = '***'`.
+- **Credentials are never logged or put in error messages.** Redaction is applied by the `command`/`args` setters
+  (and therefore `toJSON()`) to every error, not only login errors. In `command`, the value of any `key = value`
+  whose key contains `pswd`, `pwd`, `passwd` or `password` (case-insensitive) becomes `'***'`, whether the value is
+  single-quoted, double-quoted or an unquoted token; in `args`, any such key's value becomes `'***'`. This is a
+  name-based rule, not a secret scanner. Transport errors carry only the redacted URL (no credentials, query or
+  hash), and an unparseable URL is never echoed.
 - Helper: `isMocaStatus(err: unknown, status: number): err is MocaError`.
 
 ## 11. Code generation
@@ -380,35 +421,65 @@ temp directory). A config must export a plain object. Credentials can come from 
 `--from-snapshot` is used, the config file is optional. Relative `out`/`snapshot` paths in a config file resolve
 against the config file's directory; CLI flags resolve against the cwd. JSON config errors never echo file content.
 
-Consumers add `"moca:generate": "mocakit generate"` to their `package.json`. This repo has a `generate` script that
-runs the CLI from source against a real server into `examples/moca.generated.ts`.
+Consumers add `"moca:generate": "node --env-file=.env node_modules/mocakit/dist/cli.js generate"` (or similar) to
+their `package.json`. This repo has a `generate` script (`tsx --env-file=.env src/cli.ts generate`) that runs the CLI
+from source against a real server into `examples/moca.generated.ts`, per the repo's `mocakit.config.ts`.
+
+The CLI prints warnings (introspection skips, emit de-duplication/drops/skips, name collisions) to stderr as
+`warning: …`, and finishes with `Wrote N commands to <out>` (or `Would write …` with `--dry-run`), where `N` is the
+number of commands actually emitted, after filtering, de-duplication and skips.
 
 ### Introspection
 
 1. `list active commands` runs once, unfiltered. It captures command name, component level, command type and
    description.
+   Names are trimmed and internal whitespace collapsed; commands are de-duplicated case- and
+   whitespace-insensitively (first row wins). A name that doesn't match `/^[A-Za-z0-9_][A-Za-z0-9_ .\-]*$/` after
+   trimming is skipped with a warning (returned in `warnings`), so it is never queried or emitted. No commands at all
+   is an error.
 2. `list active command arguments` runs once, unfiltered. It captures command, argument name, dtype, required flag
-   and description. If the server rejects an unfiltered call, the generator falls back to per-command
-   `list active command arguments where command = '...'` calls with concurrency 8.
+   (`1`/`y`/`yes`/`t`/`true`) and description. If the unfiltered call fails with a `MocaCommandError` **or returns
+   zero rows**, the generator first probes with a single `list active command arguments where command = '...'` for
+   the first command; if that also fails it throws one error describing both failures. Otherwise it fans out
+   per-command calls (concurrency 8 by default, `IntrospectOptions.concurrency`), aborting the rest on the first
+   failure. Any other error from the unfiltered call propagates unchanged.
 3. Columns are matched case-insensitively against a candidate list per field. If a required field can't be
-   matched, the generator fails with an error that lists the columns actually received. Exact column names are
-   confirmed against a live server during implementation.
-4. The full, unfiltered `Snapshot` (`{ generatedAt, mocakitVersion, server: url, commands: [...] }`, sorted by
-   command name, argument order preserved) is written to `snapshot`, so filters can change without re-introspecting.
-   `--from-snapshot` skips the server entirely, for CI and offline use.
+   matched, the generator fails with an error that lists the columns actually received; two fields resolving to the
+   same column is also an error. The candidate lists are still to be confirmed against a live server (§14).
+4. The full, unfiltered `Snapshot` (`{ mocakitVersion, generatedAt, server, commands: [...] }`, `server` with
+   credentials/query/hash removed, commands sorted by code unit, argument order preserved) is written to
+   `snapshot`, so filters can change without re-introspecting. If the file already exists and its `commands` are
+   deep-equal to the new ones, it is left untouched (`Snapshot unchanged: …`), so `generatedAt` doesn't churn.
+   `--from-snapshot` skips the server entirely, for CI and offline use; `readSnapshot` strips a BOM, validates the
+   shape, and rejects (with the offending name) any command name that fails the rule in step 1.
 5. Filters (`include`, `exclude`, `levels`) are applied when emitting.
 
 ### Emitted file
 
-A single `moca.generated.ts`, deterministic for a given snapshot. Commands are de-duplicated (case- and
-whitespace-insensitively; the lowest code-unit name wins, with a warning) and sorted before emitting. Repeated
-argument names within a command are de-duplicated case-insensitively (first wins, with a warning).
+A single `moca.generated.ts`, deterministic for a given snapshot (input order doesn't matter). Before emitting,
+`emit` normalises the command list, pushing a warning for each change:
+
+- A command with a **required** argument whose name isn't a valid MOCA argument name
+  (`/^[A-Za-z_][A-Za-z0-9_]*$/`, the rule `renderCommand` enforces) could never be called, so the whole command is
+  skipped.
+- Commands are de-duplicated case- and whitespace-insensitively; the lowest code-unit name wins.
+- An **optional** argument with an invalid name is dropped.
+- Repeated argument names within a command are de-duplicated case-insensitively (first wins).
+
+`emit` returns `{ code, warnings, count }`, where `count` is the number of commands emitted.
+
+The file contains:
 
 - A header comment with the mocakit version, server URL (never credentials), command count and
   `/* eslint-disable */`.
 - `export type MocaCommandName = 'list orders' | ...`.
-- One `export interface <Pascal>Args` per command that has arguments. Each property has JSDoc with its description
-  and dtype, and required args are non-optional. Server text in JSDoc is sanitised (`*/`, leading `@`, backticks).
+- One `export interface <Method>Args` per command that has arguments, named after its method in PascalCase, so it
+  inherits the method's collision suffix (`listOrders_2` → `ListOrders_2Args`). Commands with no arguments use
+  `mk.NoArgs` (`Record<string, never>`) instead. Each property has JSDoc with its description and dtype, and
+  required args are non-optional.
+- Server text in JSDoc is sanitised: `*/` becomes `*\/`; an `@` at the start or after a character that is not a
+  word character or backslash becomes `\@` (so no JSDoc tags or `{@link}`s); every whitespace run becomes one
+  space, and the result is trimmed. In a method's summary, backticks in the command name become `'`.
 - A `const S = { ... } as const satisfies Record<string, mk.CommandSpec>` table:
   `[mocaName, [[argName, dtype, required], ...]]`.
 - An interface/class pair. The methods are typed as properties through shared generic callable interfaces exported by
@@ -426,6 +497,12 @@ argument names within a command are de-duplicated case-insensitively (first wins
   export function createMoca(config: mk.MocaConfig, deps?: mk.MocaClientDeps): Moca;
   ```
 
+  `defineCommands` installs each method as a non-enumerable, writable, configurable property. If a name already
+  exists anywhere on the prototype chain (e.g. a `MocaClient` member added in a newer mocakit than the one that
+  generated the file), it is **skipped** with `process.emitWarning("mocakit: generated command \"<name>\" clashes
+  with a MocaClient member and was not installed; regenerate the client with the installed mocakit version")`
+  rather than overwriting the member or throwing at import time.
+
   `Command`/`OptionalArgsCommand` each have three call signatures: `RowsOptions` → `T[]`, `FullOptions` →
   `MocaResult<T>`, and plain `CallOptions` → the union. `T` defaults to `Output<C>` and is wrapped in `NoInfer`, so it
   can only be set explicitly (`moca.listOrders<MyRow>(...)`), never inferred from an annotation. Consumers need
@@ -441,18 +518,20 @@ argument names within a command are de-duplicated case-insensitively (first wins
 | date (`D`, …) | `string \| Date` |
 | unknown | `string` |
 
-All optional argument types also accept `null`, which removes the argument just like `undefined`. The exact dtype codes are confirmed against the live
-server.
+The dtype codes are classified exactly like the column types in §8. All optional argument types also accept `null`,
+which removes the argument just like `undefined`. The codes are still to be confirmed against a live server.
 
 ### Naming
 
-- Command name → split on whitespace and non-alphanumerics → lowercase → camelCase (`list active commands` →
-  `listActiveCommands`). A leading digit gets an `_` prefix.
-- Reserved client member names (`exec`, `call`, `login`, `logout`, `session`, plus `Object.prototype` names) get a
-  `cmd` prefix (`cmdExec`).
-- Collisions after conversion get `_2`, `_3` (sorted by MOCA name), and the CLI prints a warning.
-- Arg interface names are PascalCase + `Args`, with the same collision suffixes.
-- Argument names are kept verbatim, and quoted in the interface if they aren't valid identifiers.
+- Command name → Unicode NFKD with combining marks removed → lowercase → split on runs of non-`[a-z0-9]` →
+  camelCase (`list active commands` → `listActiveCommands`). A name with no such characters becomes `command`. A
+  leading digit gets an `_` prefix.
+- Reserved names get a `cmd` prefix (`exec` → `cmdExec`): the client members `exec`, `call`, `login`, `logout`,
+  `session`, plus `constructor`, `then` (so a client is never mistaken for a thenable) and every
+  `Object.prototype` name. A test keeps this list in sync with `MocaClient`'s actual members.
+- Collisions after conversion get `_2`, `_3` (in code-unit order of the MOCA name), and the CLI prints a warning.
+- Arg interface names are the method name in PascalCase + `Args`, so they carry the same collision suffixes.
+- Argument names are kept verbatim (only valid MOCA argument names reach this point); `__proto__` is quoted.
 
 ## 12. Packaging
 
@@ -479,18 +558,24 @@ server.
 - **Codegen:** snapshot tests from a fixture `moca.commands.json`, covering naming collisions, reserved names,
   dtype mapping and no-arg commands. The generated output is also type-checked with `tsc --noEmit` against a
   small usage file.
-- **Live** (skipped unless `MOCA_URL` is set): login, `listActiveCommands()`, `generate --dry-run`, 510 behavior.
+- **Live** (`test/live.test.ts`, skipped unless `MOCA_URL` is set; prints nothing secret): login (logs the login
+  columns), `list active commands` and unfiltered `list active command arguments` (logs columns and distinct
+  values, for §14 items 1–3), full introspection, 510 behavior (`[select 1 x from dual where 1 = 0]` returns `[]`,
+  and throws 510 with `noRowsIsError`; a non-Oracle dialect is logged and skipped), a raw request with a bogus
+  `SESSION_KEY` (logs the status/message and asserts it is non-zero, for §14 item 5), and `runGenerate` with
+  `dryRun: true` from env vars (asserts `Would write …` and that no files are written).
 
 ## 14. Items to confirm against a live server
 
-These don't block the design. They are verified during implementation, and the code is written defensively
-around them:
+These don't block the design. The code is written defensively around them, and the live suite (§13) logs what it
+needs to confirm them; none has been confirmed against a live server yet:
 
 1. Column names returned by `list active commands` and `list active command arguments`.
 2. Whether `list active command arguments` works unfiltered.
 3. The dtype and column-type code sets (for the mapping tables in §8 and §11).
 4. Whether MOCA ever sends an empty `<field></field>` for an empty string (mocakit currently reads it as NULL).
 5. That a 523 always means the command did not execute, including when a command makes nested `remote(...)` calls
-   (the single post-523 retry relies on this).
+   (the single post-523 retry relies on this). The live suite's bogus-`SESSION_KEY` check records which status an
+   invalid session actually produces.
 
 (`logout user` is confirmed to exist.)
