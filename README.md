@@ -20,7 +20,7 @@ Or install straight from git (any branch, tag or commit). The package's `prepare
 install, so no prebuilt files need to be committed:
 
 ```bash
-npm install "git+https://<git-host>/<owner>/mocakit.git#<branch-or-tag>"
+npm install "git+https://github.com/rnsaway/mocakit.git#<branch-or-tag>"
 ```
 
 npm 11 may print an advisory warning that mocakit's `prepare` script (`npm run build`) is "not yet covered by

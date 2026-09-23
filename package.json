@@ -2,6 +2,24 @@
   "name": "mocakit",
   "version": "0.1.0",
   "description": "Typed TypeScript SDK and code generator for MOCA (Blue Yonder / RedPrairie WMS)",
+  "keywords": [
+    "moca",
+    "blue-yonder",
+    "redprairie",
+    "wms",
+    "jda",
+    "sdk",
+    "typescript",
+    "codegen"
+  ],
+  "homepage": "https://github.com/rnsaway/mocakit#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rnsaway/mocakit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rnsaway/mocakit/issues"
+  },
   "license": "MIT",
   "type": "module",
   "engines": {
