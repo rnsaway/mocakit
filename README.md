@@ -5,7 +5,7 @@ MOCA command on your instance into a typed function.
 
 ## Requirements
 
-- Node 20.6+ (the first release with `--env-file`, used below to keep the password off the command line).
+- Node 20.12+ (the first release with `util.parseEnv`, which the CLI uses to load `.env` files).
 - TypeScript ≥ 5.4 to consume the generated client (it uses `NoInfer`, added in 5.4).
 - `@types/node` (or another source of DOM lib types) in your project, for the `AbortSignal` type used by
   `CallOptions.signal`.
@@ -32,16 +32,55 @@ export default defineConfig({
 });
 ```
 
-Don't put the password on the command line, where it can end up in shell history or a process list. Keep it in a
-`.env` file (gitignored) and load it explicitly:
+### Recommended setup
 
-```bash
-node --env-file=.env node_modules/mocakit/dist/cli.js generate
+Don't put the password on the command line, where it can end up in shell history or a process list. Keep the
+credentials in a `.env` file next to your `package.json`:
+
+```dotenv
+# .env  -- add this file to .gitignore; never commit it
+MOCA_URL=https://moca.example.com/service
+MOCA_USER=jdoe
+MOCA_PASSWORD=change-me
+MOCA_IGNORE_SSL=1
 ```
 
-or add `"moca:generate": "node --env-file=.env node_modules/mocakit/dist/cli.js generate"` to `package.json` and
-run `npm run moca:generate`. Exporting the variables inline (`export MOCA_URL=... MOCA_PASSWORD=...`) works too,
-but it also ends up in your shell history.
+```bash
+echo .env >> .gitignore
+```
+
+and add two scripts to your `package.json`:
+
+```json
+{
+  "scripts": {
+    "moca": "mocakit",
+    "moca:generate": "mocakit generate"
+  }
+}
+```
+
+Then run either of:
+
+```bash
+npm run moca:generate
+npm run moca -- generate --dry-run   # any flags after --
+```
+
+`npm run moca generate` (without `--`) is **not** valid: npm treats `generate` as its own argument, not the
+script's. Use `npm run moca -- generate` or `npm run moca:generate`.
+
+**How `.env` is loaded.** `mocakit generate` loads `./.env` from the current directory automatically if it exists
+(and carries on silently if it doesn't), printing `Loaded N variables from <path>`. Values are never printed;
+`--verbose` adds the variable names. Other options:
+
+- `--env-file <path>` loads a different file instead (resolved against the cwd); it's an error if the file can't be
+  read.
+- `--no-env-file` turns the automatic `.env` loading off.
+- Variables already set in your real environment win over the file, as with `node --env-file`, so a CI job's
+  secrets take precedence over a stray `.env`.
+- A `mocakit.config.ts` that reads `process.env.MOCA_URL` (etc.) sees the `.env` values too: the CLI exposes the
+  file's variables on `process.env` while it runs (only those not already set), and removes them afterwards.
 
 This writes `src/moca.generated.ts` and, next to it, a `src/moca.commands.json` snapshot. **Commit both files.**
 The snapshot lets you regenerate without contacting the server — for example in CI, or after only changing
@@ -58,7 +97,8 @@ At most 50 warnings are printed, followed by `... and N more warnings (use --ver
 to print every one.
 
 Other flags: `--config <path>` (default: `mocakit.config.{ts,mts,mjs,js,json}` in the cwd), `--out <path>`,
-`--dry-run` (introspect/report without writing), `--verbose` (print every warning). Run `mocakit generate --help` for the full list.
+`--env-file <path>` / `--no-env-file` (see above), `--dry-run` (introspect/report without writing), `--verbose`
+(print every warning, and the names of loaded env variables). Run `mocakit generate --help` for the full list.
 
 ### Config files
 

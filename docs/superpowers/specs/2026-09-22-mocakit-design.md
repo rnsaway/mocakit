@@ -15,8 +15,8 @@
 
 ### Non-goals
 
-- Browser, edge, Bun or Deno support. Node ≥ 20.6 only (the first release with `--env-file`, which the README's
-  generate workflow uses).
+- Browser, edge, Bun or Deno support. Node ≥ 20.12 only (the first release with `util.parseEnv`, which the CLI uses to
+  load `.env` files).
 - Converting MOCA names to camelCase (argument names and row keys stay exactly as MOCA reports them).
 - Inferring command output shapes by executing commands.
 - A `Result`-type / non-throwing API.
@@ -28,7 +28,7 @@
 |---|---|
 | Package name | `mocakit` |
 | Where generated code lives | In the consuming project, via `mocakit generate`. The package ships runtime + CLI only. |
-| Runtime | Node ≥ 20.6 only; `undici` `fetch` + `Agent` for TLS-skip and timeouts |
+| Runtime | Node ≥ 20.12 only; `undici` `fetch` + `Agent` for TLS-skip and timeouts |
 | Argument rendering | `where` clause: `list orders where wh_id = 'WMD1' and ordqty = 5` |
 | Raw MOCA | `moca.exec(mocaText, opts)` escape hatch (pipes, `[SQL]`, redirects, etc.) |
 | Output typing | `MocaOutputs` registry via module augmentation, plus a per-call generic override; default `MocaRow` |
@@ -399,7 +399,8 @@ Policies:
 ### CLI
 
 ```bash
-npx mocakit generate [--config mocakit.config.ts] [--out path] [--from-snapshot path] [--dry-run] [--verbose]
+npx mocakit generate [--config mocakit.config.ts] [--out path] [--from-snapshot path]
+                     [--env-file path | --no-env-file] [--dry-run] [--verbose]
 ```
 
 ```ts
@@ -425,9 +426,26 @@ temp directory). A config must export a plain object. Credentials can come from 
 `--from-snapshot` is used, the config file is optional. Relative `out`/`snapshot` paths in a config file resolve
 against the config file's directory; CLI flags resolve against the cwd. JSON config errors never echo file content.
 
-Consumers add `"moca:generate": "node --env-file=.env node_modules/mocakit/dist/cli.js generate"` (or similar) to
-their `package.json`. This repo has a `generate` script (`tsx --env-file=.env src/cli.ts generate`) that runs the CLI
-from source against a real server into `examples/moca.generated.ts`, per the repo's `mocakit.config.ts`.
+**Env files.** Before anything else, `generate` loads environment variables from a dotenv file, parsed with Node's
+`util.parseEnv` (the parser behind `node --env-file`):
+
+- `--env-file <path>` loads that file (resolved against the cwd); if it can't be read the CLI fails with
+  `mocakit: Cannot read env file <path>: <code>` (e.g. `ENOENT`).
+- Without `--env-file`, `./.env` in the cwd is loaded if it exists; if it's absent the CLI carries on silently.
+- `--no-env-file` turns the automatic `./.env` off. Combining it with `--env-file` is an error.
+- Variables already in the real environment win over the file (Node's `--env-file` semantics): `runCli` passes
+  `env = { ...fileVars, ...process.env }` to `runGenerate`.
+- A JS/TS config reads the real `process.env`, not that `env` object. So for the duration of the run the CLI also
+  assigns the file's variables that are *missing* from `process.env` onto it, and deletes exactly those again when
+  the run ends (success or failure). `runCli` therefore leaves `process.env` as it found it, which matters when it
+  is called in-process (tests, or a tool embedding it).
+- The CLI prints one line, `Loaded N variables from <path>`; with `--verbose` the line also lists the variable
+  **names** (sorted). Values are never printed, and read/parse errors never echo file content.
+
+Consumers add `"moca": "mocakit"` and `"moca:generate": "mocakit generate"` to their `package.json` scripts and keep
+credentials in a gitignored `.env`. This repo has a `generate` script (`tsx src/cli.ts generate`, relying on the
+automatic `.env` loading) that runs the CLI from source against a real server into `examples/moca.generated.ts`, per
+the repo's `mocakit.config.ts`.
 
 The CLI prints warnings (introspection skips, emit de-duplication/drops/skips, name collisions) to stderr as
 `warning: …`, at most 50 in total, followed by `... and N more warnings (use --verbose to see all)` if there were
@@ -573,7 +591,7 @@ case-insensitively. All optional argument types also accept `null`, which remove
 ## 12. Packaging
 
 - `package.json`: `"type": "module"`, `exports` for ESM + CJS + types, `bin: { "mocakit": "dist/cli.js" }`,
-  `engines: { node: ">=20.6" }`.
+  `engines: { node: ">=20.12" }` (for `util.parseEnv`).
 - Build with `tsup`. TypeScript `strict`.
 - Runtime dependencies: `undici` (for the `Agent`; same major as Node's bundled version). CLI-only dependency:
   `jiti`.

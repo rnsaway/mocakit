@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=20.6"
+    "node": ">=20.12"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -33,7 +33,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "generate": "tsx --env-file=.env src/cli.ts generate",
+    "generate": "tsx src/cli.ts generate",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
