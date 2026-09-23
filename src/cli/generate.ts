@@ -67,6 +67,12 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     try {
       snapshot = await readSnapshot(snapshotFile);
     } catch (error) {
+      // readSnapshot's own errors (invalid JSON, not a mocakit snapshot) already mention the
+      // path, so prefixing "Cannot read snapshot <path>:" would print it twice. A raw Node fs
+      // error (e.g. ENOENT) has a `code` and doesn't, so it still gets the prefix.
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      const message = error instanceof Error ? error.message : String(error);
+      if (typeof code !== 'string' && message.includes(snapshotFile)) throw new Error(message);
       throw new Error(`Cannot read snapshot ${snapshotFile}: ${errorDetail(error)}`);
     }
   } else {

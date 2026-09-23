@@ -37,7 +37,16 @@ async function importConfig(path: string): Promise<MocakitConfig> {
     // same transpiled code in-process through Node's `Module` machinery instead, with no
     // tempfile; verified empirically (see load-config.test.ts).
     const jiti = createJiti(import.meta.url, { fsCache: false, moduleCache: false });
-    const mod = jiti(path) as { default?: unknown } | undefined;
+    let mod: { default?: unknown } | undefined;
+    try {
+      mod = jiti(path) as { default?: unknown } | undefined;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('await is only valid')) {
+        throw new Error(`${path} cannot use top-level await (config files are loaded synchronously)`);
+      }
+      throw error;
+    }
     loaded = mod?.default ?? mod;
   }
   if (!isConfigObject(loaded)) throw new Error(`${path} must export a config object`);

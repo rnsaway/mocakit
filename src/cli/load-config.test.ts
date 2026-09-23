@@ -98,6 +98,15 @@ describe('loadConfig', () => {
     await writeFile(path, 'export default 42;\n');
     await expect(loadConfig(undefined, dir)).rejects.toThrow(`${path} must export a config object`);
   });
+
+  it('reports top-level await in a .ts config with a friendlier, synchronous-loading message', async () => {
+    const dir = await tempDir();
+    const path = join(dir, 'mocakit.config.ts');
+    await writeFile(path, 'await Promise.resolve();\nexport default {};\n');
+    await expect(loadConfig(undefined, dir)).rejects.toThrow(
+      `${path} cannot use top-level await (config files are loaded synchronously)`,
+    );
+  });
 });
 
 describe('resolveConnection', () => {
@@ -111,7 +120,7 @@ describe('resolveConnection', () => {
     expect(() => resolveConnection({}, {})).toThrow(/url \(MOCA_URL\), username \(MOCA_USER\), password \(MOCA_PASSWORD\)/);
   });
 
-  it.each(['1', 'yes', 'true', 'YES', 'TRUE', '1'])('treats MOCA_IGNORE_SSL=%s as true', (value) => {
+  it.each(['1', 'yes', 'true', 'YES', 'TRUE'])('treats MOCA_IGNORE_SSL=%s as true', (value) => {
     expect(
       resolveConnection({ url: 'https://c', username: 'u', password: 'p' }, { MOCA_IGNORE_SSL: value }).ignoreSslIssues,
     ).toBe(true);

@@ -147,6 +147,23 @@ describe('runGenerate', () => {
     );
   });
 
+  it('does not double the path when the underlying snapshot error already includes it', async () => {
+    const dir = await tempDir();
+    const badSnapshot = join(dir, 'bad-snapshot.json');
+    await writeFile(badSnapshot, 'not json');
+    const { io: cliIo } = io();
+    let caught: unknown;
+    try {
+      await runGenerate({ fromSnapshot: badSnapshot, out: 'gen/moca.ts', dryRun: false, cwd: dir, env: {}, io: cliIo });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toBe(`${badSnapshot} is not valid JSON: Unexpected token 'o', "not json" is not valid JSON`);
+    expect(message.match(new RegExp(badSnapshot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(1);
+  });
+
   it('wraps an unwritable output path as "Cannot write", failing before introspecting the server', async () => {
     const dir = await tempDir();
     // Create a plain file where a directory component of `out` needs to be, so mkdir(recursive) fails.
