@@ -11,11 +11,37 @@ const exists = (path: string) =>
     () => false,
   );
 
+function isConfigObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 async function importConfig(path: string): Promise<MocakitConfig> {
-  if (extname(path) === '.json') return JSON.parse(await readFile(path, 'utf8')) as MocakitConfig;
-  const { createJiti } = await import('jiti');
-  const jiti = createJiti(import.meta.url);
-  return (await jiti.import(path, { default: true })) as MocakitConfig;
+  let loaded: unknown;
+  if (extname(path) === '.json') {
+    const raw = (await readFile(path, 'utf8')).replace(/^﻿/, '');
+    try {
+      loaded = JSON.parse(raw);
+    } catch {
+      // Deliberately drop the parser's own message (and any `cause`): it can quote the
+      // offending token, and a config file may contain a password or other secret.
+      throw new Error(`${path} is not valid JSON`);
+    }
+  } else {
+    const { createJiti } = await import('jiti');
+    // A `.ts` config may embed credentials (e.g. `password: '...'`). jiti's disk cache would
+    // otherwise write the compiled module -- inline secrets included -- to the OS temp
+    // directory, so both caches are disabled here. That alone isn't enough, though: jiti's
+    // async `.import()` still needs a real file to hand to Node's native ESM loader, so it
+    // writes the transpiled module -- secrets and all -- to the OS temp dir and never removes
+    // it, regardless of these options. The synchronous, `require()`-like call below runs the
+    // same transpiled code in-process through Node's `Module` machinery instead, with no
+    // tempfile; verified empirically (see load-config.test.ts).
+    const jiti = createJiti(import.meta.url, { fsCache: false, moduleCache: false });
+    const mod = jiti(path) as { default?: unknown } | undefined;
+    loaded = mod?.default ?? mod;
+  }
+  if (!isConfigObject(loaded)) throw new Error(`${path} must export a config object`);
+  return loaded as MocakitConfig;
 }
 
 export async function loadConfig(
@@ -33,7 +59,10 @@ export async function loadConfig(
     if (await exists(path)) return { config: await importConfig(path), path };
   }
   if (options.optional) return null;
-  throw new Error(`No mocakit config found in ${cwd} (looked for ${CANDIDATES.join(', ')})`);
+  throw new Error(
+    `No mocakit config found in ${cwd} (looked for ${CANDIDATES.join(', ')}); ` +
+      `set MOCA_URL, MOCA_USER and MOCA_PASSWORD instead`,
+  );
 }
 
 export function resolveConnection(config: MocakitConfig, env: Record<string, string | undefined>): MocaConfig {
@@ -52,7 +81,7 @@ export function resolveConnection(config: MocakitConfig, env: Record<string, str
   if (config.device !== undefined) connection.device = config.device;
   if (config.locale !== undefined) connection.locale = config.locale;
   if (config.timeoutMs !== undefined) connection.timeoutMs = config.timeoutMs;
-  const ignoreSsl = config.ignoreSslIssues ?? (env.MOCA_IGNORE_SSL === 'true' ? true : undefined);
+  const ignoreSsl = config.ignoreSslIssues ?? (/^(1|yes|true)$/i.test(env.MOCA_IGNORE_SSL ?? '') ? true : undefined);
   if (ignoreSsl !== undefined) connection.ignoreSslIssues = ignoreSsl;
   return connection;
 }
