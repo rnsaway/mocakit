@@ -65,6 +65,6 @@ export async function check(): Promise<void> {
   // @ts-expect-error a command with a required POINTER argument is not generated
   await moca.consumeWidgetPointer();
 
-  const args: ListOrdersArgs ={ wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null };
+  const args: ListOrdersArgs = { wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null };
   void [qty, status, fullRows, x, eitherUnknown, firstRow, bad, args];
 }

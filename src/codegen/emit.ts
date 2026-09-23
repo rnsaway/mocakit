@@ -49,8 +49,8 @@ function propertyName(name: string): string {
 
 /** A command as emitted: arguments renamed, filtered and de-duplicated, plus what was set aside. */
 interface EmitCommand extends SnapshotCommand {
-  /** The server listed a wildcard argument (`@*`, `*`, `x.*`): extra arguments pass through. */
-  passThrough: boolean;
+  /** The first wildcard argument (`@*`, `*`, `x.*`) the server listed, raw: extra arguments pass through. */
+  wildcard: string | undefined;
   /** Optional arguments that can only be passed on the MOCA stack, as `name (DTYPE)`. */
   stackOnly: string[];
 }
@@ -60,13 +60,17 @@ function bareArgName(name: string): string {
   return name.replace(/^@\+?/, '');
 }
 
-/** `@*`, `*`, `@+*`, `foo.*`, `@+invdtl.*`: "pass through whatever stack/where arguments are present". */
+/** `@*`, `*`, `@+*`, `foo.*`, `@+widget.*`: "pass through whatever stack/where arguments are present". */
 function isWildcardArg(name: string): boolean {
   const bare = bareArgName(name);
   return bare === '*' || bare.endsWith('.*');
 }
 
-type ArgsOutcome = { skip: string } | { args: SnapshotArg[]; passThrough: boolean; stackOnly: string[]; warnings: string[] };
+const isStackArg = (arg: SnapshotArg): boolean => classifyMocaType(arg.dtype) === 'stack';
+
+type ArgsOutcome =
+  | { skip: string }
+  | { args: SnapshotArg[]; wildcard: string | undefined; stackOnly: string[]; warnings: string[] };
 
 /** Applies the argument rules of spec §11 to one command's raw server arguments. */
 function normalizeArgs(command: SnapshotCommand): ArgsOutcome {
@@ -79,14 +83,14 @@ function normalizeArgs(command: SnapshotCommand): ArgsOutcome {
     };
   }
 
+  // Pass 1: rename, drop wildcards and invalid names, and merge entries that share a bare name.
   const warnings: string[] = [];
-  const seen = new Map<string, string>();
-  const args: SnapshotArg[] = [];
-  const stackOnly: string[] = [];
-  let passThrough = false;
+  const merged: SnapshotArg[] = [];
+  const byKey = new Map<string, { index: number; raw: string }>();
+  let wildcard: string | undefined;
   for (const arg of command.args) {
     if (isWildcardArg(arg.name)) {
-      passThrough = true;
+      wildcard ??= arg.name;
       continue;
     }
     const name = bareArgName(arg.name);
@@ -94,37 +98,50 @@ function normalizeArgs(command: SnapshotCommand): ArgsOutcome {
       warnings.push(`Command ${str(command.name)} argument ${str(arg.name)} is not a valid MOCA argument name; dropped the argument`);
       continue;
     }
+    const renamed = name === arg.name ? arg : { ...arg, name };
     const key = name.toLowerCase();
-    const firstRaw = seen.get(key);
-    if (firstRaw !== undefined) {
-      // `wh_id` next to `@wh_id` is the same argument listed both ways; only a repeat of the same
-      // spelling (ignoring case) is worth a warning.
-      if (firstRaw.toLowerCase() === arg.name.toLowerCase()) {
-        warnings.push(`Command ${str(command.name)} lists argument ${str(arg.name)} more than once; kept the first`);
-      }
+    const first = byKey.get(key);
+    if (first === undefined) {
+      byKey.set(key, { index: merged.length, raw: arg.name });
+      merged.push(renamed);
       continue;
     }
-    seen.set(key, arg.name);
-    if (classifyMocaType(arg.dtype) === 'stack') {
-      if (arg.required) {
-        return {
-          skip: `Command ${str(command.name)} requires stack argument ${str(name)} (${arg.dtype}); skipped (run it with exec())`,
-        };
-      }
-      stackOnly.push(`${name} (${doc(arg.dtype)})`);
-      continue;
+    // `wh_id` next to `@wh_id` is the same argument listed both ways; only a repeat of the same
+    // spelling (ignoring case) is worth a warning.
+    if (first.raw.toLowerCase() === arg.name.toLowerCase()) {
+      warnings.push(`Command ${str(command.name)} lists argument ${str(arg.name)} more than once; kept the first`);
     }
-    args.push(name === arg.name ? arg : { ...arg, name });
+    // Keep the first entry's name and dtype, unless it is stack-typed and this one isn't; the
+    // argument is required if either entry says so.
+    const kept = merged[first.index] as SnapshotArg;
+    const base = isStackArg(kept) && !isStackArg(renamed) ? renamed : kept;
+    merged[first.index] = { ...base, required: kept.required || renamed.required };
   }
-  return { args, passThrough, stackOnly, warnings };
+
+  // Pass 2: set aside stack-typed arguments.
+  const args: SnapshotArg[] = [];
+  const stackOnly: string[] = [];
+  for (const arg of merged) {
+    if (!isStackArg(arg)) {
+      args.push(arg);
+      continue;
+    }
+    if (arg.required) {
+      return {
+        skip: `Command ${str(command.name)} requires stack argument ${str(arg.name)} (${arg.dtype}); skipped (run it with exec())`,
+      };
+    }
+    stackOnly.push(`${arg.name} (${doc(arg.dtype)})`);
+  }
+  return { args, wildcard, stackOnly, warnings };
 }
 
 /**
  * Drops repeated commands (same name ignoring case and whitespace runs), keeping the one whose name
  * sorts lowest, and applies the argument rules of `normalizeArgs`: a leading `@`/`@+` is stripped;
  * wildcard arguments are removed and mark the command as pass-through; optional stack-typed
- * arguments are set aside; repeated names (ignoring case) keep the first; names `renderCommand`
- * would reject (not `[A-Za-z_][A-Za-z0-9_]*`) are dropped when optional. A command with an invalid
+ * arguments are set aside; repeated names (ignoring case) merge into the first entry (see
+ * `normalizeArgs`); names `renderCommand` would reject (not `[A-Za-z_][A-Za-z0-9_]*`) are dropped when optional. A command with an invalid
  * or stack-typed *required* argument could never be called this way, so it is skipped entirely.
  * Returns the commands sorted by name, so the output does not depend on input order.
  */
@@ -150,7 +167,7 @@ function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: Em
     }
     kept.set(key, command);
     warnings.push(...outcome.warnings);
-    result.push({ ...command, args: outcome.args, passThrough: outcome.passThrough, stackOnly: outcome.stackOnly });
+    result.push({ ...command, args: outcome.args, wildcard: outcome.wildcard, stackOnly: outcome.stackOnly });
   }
   return { commands: result, warnings };
 }
@@ -180,7 +197,9 @@ function emitMember(method: string, argsType: string, command: EmitCommand): str
       .join(' · '),
   );
   const notes: string[] = [];
-  if (command.passThrough) notes.push('Accepts additional arguments (@*): pass them via opts.extraArgs.');
+  if (command.wildcard !== undefined) {
+    notes.push(`Accepts additional arguments (wildcard: ${doc(command.wildcard)}): pass them via opts.extraArgs.`);
+  }
   if (command.stackOnly.length > 0) notes.push(`Stack-only arguments not settable here: ${command.stackOnly.join(', ')}`);
   const callable = hasRequired ? 'mk.Command' : 'mk.OptionalArgsCommand';
   const jsdoc = notes.length === 0 ? [`  /** ${summary} */`] : ['  /**', ...[summary, ...notes].map((line) => `   * ${line}`), '   */'];

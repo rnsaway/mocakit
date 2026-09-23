@@ -217,8 +217,22 @@ describe('runGenerate', () => {
     expect(err).toHaveLength(51);
     expect(err[0]).toBe('warning: Command "cmd 00" argument "bad-name" is not a valid MOCA argument name; dropped the argument');
     expect(err[49]).toBe('warning: Command "cmd 49" argument "bad-name" is not a valid MOCA argument name; dropped the argument');
-    expect(err[50]).toBe('…and 3 more warnings');
+    expect(err[50]).toBe('... and 3 more warnings (use --verbose to see all)');
     expect(out.at(-1)).toMatch(/^Would write 53 commands/);
+  });
+
+  it('prints every warning with verbose', async () => {
+    const dir = await tempDir();
+    const commands = Array.from({ length: 53 }, (_, i) => ({
+      name: `cmd ${String(i).padStart(2, '0')}`,
+      args: [{ name: 'bad-name', dtype: 'STRING', required: false }],
+    }));
+    const snapshotFile = join(dir, 'snap.json');
+    await writeFile(snapshotFile, JSON.stringify({ mocakitVersion: '0.1.0', generatedAt: '', server: 'https://moca.test', commands }));
+    const { io: cliIo, err } = io();
+    await runGenerate({ fromSnapshot: snapshotFile, out: 'gen/moca.ts', dryRun: true, verbose: true, cwd: dir, env: {}, io: cliIo });
+    expect(err).toHaveLength(53);
+    expect(err.every((line) => line.startsWith('warning: '))).toBe(true);
   });
 
   it('prints exactly 50 warnings without a summary line', async () => {

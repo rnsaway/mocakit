@@ -54,10 +54,11 @@ npx mocakit generate --from-snapshot src/moca.commands.json
 If the server's commands haven't changed since the last run, the existing snapshot is left byte-for-byte untouched
 (no `generatedAt` churn). The final `Wrote N commands` line counts the commands actually emitted, and anything the
 generator had to skip or adjust is printed to stderr as a `warning: …` line (see [Method names](#method-names)).
-At most 50 warnings are printed, followed by `…and N more warnings`.
+At most 50 warnings are printed, followed by `... and N more warnings (use --verbose to see all)`; pass `--verbose`
+to print every one.
 
 Other flags: `--config <path>` (default: `mocakit.config.{ts,mts,mjs,js,json}` in the cwd), `--out <path>`,
-`--dry-run` (introspect/report without writing). Run `mocakit generate --help` for the full list.
+`--dry-run` (introspect/report without writing), `--verbose` (print every warning). Run `mocakit generate --help` for the full list.
 
 ### Config files
 
@@ -158,7 +159,8 @@ await moca.exec("list orders where wh_id = 'WMD1' | process order results");
 
 **Pass-through commands.** A command whose server definition includes a wildcard argument (`@*`, `*`, or `x.*`)
 forwards whatever arguments it's given to the commands it calls. Its doc comment says
-`Accepts additional arguments (@*): pass them via opts.extraArgs.` Pass those extra arguments through `extraArgs`:
+`Accepts additional arguments (wildcard: \@*): pass them via opts.extraArgs.`, naming the wildcard the server
+listed. Pass those extra arguments through `extraArgs`:
 
 ```ts
 await moca.processOrders({ wh_id: 'WMD1' }, { extraArgs: { ordnum: 'A1', client_id: 'C1' } });

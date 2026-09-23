@@ -248,7 +248,7 @@ describe('emit', () => {
         [
           '  /**',
           '   * `process widgets` · level: wmd · Processes widgets',
-          '   * Accepts additional arguments (@*): pass them via opts.extraArgs.',
+          '   * Accepts additional arguments (wildcard: \\@*): pass them via opts.extraArgs.',
           '   */',
           '  processWidgets: mk.Command<ProcessWidgetsArgs, "process widgets">;',
         ].join('\n'),
@@ -260,14 +260,69 @@ describe('emit', () => {
     });
 
     it('recognises every wildcard form, required or not', () => {
-      for (const name of ['@*', '*', '@+invdtl.*', 'foo.*', '@foo.*', '@+*']) {
+      for (const name of ['@*', '*', '@+widget.*', 'foo.*', '@foo.*', '@+*']) {
         const result = one([{ name, dtype: 'STRING', required: name === '*' }]);
         expect(result.warnings, name).toEqual([]);
         expect(result.count, name).toBe(1);
         expect(result.code, name).toContain('  cmd: ["cmd", []],');
-        expect(result.code, name).toContain('   * Accepts additional arguments (@*): pass them via opts.extraArgs.');
+        const shown = name.replace('@', '\\@');
+        expect(result.code, name).toContain(`   * Accepts additional arguments (wildcard: ${shown}): pass them via opts.extraArgs.`);
         expect(result.code, name).toContain('  cmd: mk.OptionalArgsCommand<mk.NoArgs, "cmd">;');
       }
+    });
+
+    it('names the first wildcard seen in the pass-through note', () => {
+      const result = one([
+        { name: 'foo.*', dtype: 'STRING', required: false },
+        { name: '@*', dtype: 'UNKNOWN', required: false },
+      ]);
+      expect(result.code).toContain('   * Accepts additional arguments (wildcard: foo.*): pass them via opts.extraArgs.');
+      expect(result.code).not.toContain('wildcard: \\@*');
+    });
+
+    it('makes a deduped argument required if either entry is required, keeping the first name and dtype', () => {
+      const optionalFirst = one([
+        { name: 'wh_id', dtype: 'STRING', required: false },
+        { name: '@wh_id', dtype: 'STRING', required: true },
+      ]);
+      expect(optionalFirst.code).toContain('  cmd: ["cmd", [["wh_id", "STRING", 1]]],');
+      expect(optionalFirst.code).toContain('  cmd: mk.Command<CmdArgs, "cmd">;');
+      expect(optionalFirst.warnings).toEqual([]);
+
+      const renamed = one([
+        { name: '@Wh_Id', dtype: 'INTEGER', required: false },
+        { name: 'wh_id', dtype: 'STRING', required: true },
+      ]);
+      expect(renamed.code).toContain('  cmd: ["cmd", [["Wh_Id", "INTEGER", 1]]],');
+      expect(renamed.code).toContain('  Wh_Id: number;');
+    });
+
+    it('prefers the non-stack entry when a deduped name is stack-typed in only one entry', () => {
+      for (const args of [
+        [
+          { name: '@res', dtype: 'RESULTS', required: true },
+          { name: 'res', dtype: 'STRING', required: false },
+        ],
+        [
+          { name: 'res', dtype: 'STRING', required: false },
+          { name: '@res', dtype: 'RESULTS', required: true },
+        ],
+      ]) {
+        const result = one(args);
+        expect(result.count).toBe(1);
+        expect(result.warnings).toEqual([]);
+        expect(result.code).toContain('  cmd: ["cmd", [["res", "STRING", 1]]],');
+        expect(result.code).not.toContain('Stack-only');
+      }
+    });
+
+    it('keeps the first entry when both deduped entries are stack-typed, and skips if either is required', () => {
+      const result = one([
+        { name: '@r', dtype: 'RESULTS', required: false },
+        { name: 'r', dtype: 'POINTER', required: true },
+      ]);
+      expect(result.count).toBe(0);
+      expect(result.warnings).toEqual(['Command "cmd" requires stack argument "r" (RESULTS); skipped (run it with exec())']);
     });
 
     it('leaves optional stack arguments out of the interface and spec, noting them in JSDoc', () => {
@@ -308,7 +363,7 @@ describe('emit', () => {
         [
           '  /**',
           '   * `cmd`',
-          '   * Accepts additional arguments (@*): pass them via opts.extraArgs.',
+          '   * Accepts additional arguments (wildcard: \\@*): pass them via opts.extraArgs.',
           '   * Stack-only arguments not settable here: obj (OBJECT)',
           '   */',
           '  cmd: mk.OptionalArgsCommand<mk.NoArgs, "cmd">;',

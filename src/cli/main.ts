@@ -2,12 +2,13 @@ import { parseArgs } from 'node:util';
 import { runGenerate, type CliIo } from './generate.js';
 
 const USAGE = [
-  'Usage: mocakit generate [--config <path>] [--out <path>] [--from-snapshot <path>] [--dry-run]',
+  'Usage: mocakit generate [--config <path>] [--out <path>] [--from-snapshot <path>] [--dry-run] [--verbose]',
   '',
   '  --config         Config file (default: mocakit.config.{ts,mts,mjs,js,json} in the current directory)',
   '  --out            Output file (default: config.out or src/moca.generated.ts)',
   '  --from-snapshot  Generate from a saved moca.commands.json without contacting the server',
   '  --dry-run        Introspect and report without writing files',
+  '  --verbose        Print every warning (by default only the first 50 are printed)',
   '',
   'Credentials come from the config or MOCA_URL, MOCA_USER, MOCA_PASSWORD (and MOCA_IGNORE_SSL=1|yes|true).',
 ].join('\n');
@@ -29,7 +30,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo, cwd: string 
     return 0;
   }
 
-  let values: { config?: string; out?: string; 'from-snapshot'?: string; 'dry-run'?: boolean };
+  let values: { config?: string; out?: string; 'from-snapshot'?: string; 'dry-run'?: boolean; verbose?: boolean };
   try {
     ({ values } = parseArgs({
       args: rest,
@@ -38,6 +39,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo, cwd: string 
         out: { type: 'string' },
         'from-snapshot': { type: 'string' },
         'dry-run': { type: 'boolean' },
+        verbose: { type: 'boolean' },
       },
       strict: true,
       allowPositionals: false,
@@ -54,6 +56,7 @@ export async function runCli(argv: string[], io: CliIo = defaultIo, cwd: string 
       out: values.out,
       fromSnapshot: values['from-snapshot'],
       dryRun: values['dry-run'] ?? false,
+      verbose: values.verbose ?? false,
       cwd,
       env: process.env,
       io,

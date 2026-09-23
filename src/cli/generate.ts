@@ -20,6 +20,8 @@ export interface GenerateOptions {
   out?: string;
   fromSnapshot?: string;
   dryRun: boolean;
+  /** Print every warning instead of the first `MAX_PRINTED_WARNINGS` and a count. */
+  verbose?: boolean;
   cwd: string;
   env: Record<string, string | undefined>;
   io: CliIo;
@@ -31,14 +33,14 @@ const DEFAULT_OUT = 'src/moca.generated.ts';
 /** How many individual warnings the CLI prints; the rest are summarized in one line. */
 const MAX_PRINTED_WARNINGS = 50;
 
-/** Prints warnings up to `MAX_PRINTED_WARNINGS` across all calls to `print`; `finish` reports the rest. */
-function warningPrinter(io: CliIo): { print(warnings: readonly string[]): void; finish(): void } {
+/** Prints warnings up to `limit` across all calls to `print`; `finish` reports the rest. */
+function warningPrinter(io: CliIo, limit: number): { print(warnings: readonly string[]): void; finish(): void } {
   let printed = 0;
   let suppressed = 0;
   return {
     print(warnings) {
       for (const warning of warnings) {
-        if (printed < MAX_PRINTED_WARNINGS) {
+        if (printed < limit) {
           io.error(`warning: ${warning}`);
           printed++;
         } else {
@@ -47,7 +49,7 @@ function warningPrinter(io: CliIo): { print(warnings: readonly string[]): void; 
       }
     },
     finish() {
-      if (suppressed > 0) io.error(`…and ${suppressed} more warnings`);
+      if (suppressed > 0) io.error(`... and ${suppressed} more warnings (use --verbose to see all)`);
     },
   };
 }
@@ -64,7 +66,7 @@ function errorDetail(error: unknown): string {
 
 export async function runGenerate(options: GenerateOptions): Promise<void> {
   const { cwd, io, env } = options;
-  const warn = warningPrinter(io);
+  const warn = warningPrinter(io, options.verbose ? Number.POSITIVE_INFINITY : MAX_PRINTED_WARNINGS);
   const hasFullEnvCredentials = isSet(env.MOCA_URL) && isSet(env.MOCA_USER) && isSet(env.MOCA_PASSWORD);
   const configOptional = options.fromSnapshot !== undefined || hasFullEnvCredentials;
   const loaded = await loadConfig(options.configPath, cwd, { optional: configOptional });

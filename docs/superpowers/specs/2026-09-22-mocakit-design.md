@@ -399,7 +399,7 @@ Policies:
 ### CLI
 
 ```bash
-npx mocakit generate [--config mocakit.config.ts] [--out path] [--from-snapshot path] [--dry-run]
+npx mocakit generate [--config mocakit.config.ts] [--out path] [--from-snapshot path] [--dry-run] [--verbose]
 ```
 
 ```ts
@@ -430,8 +430,8 @@ their `package.json`. This repo has a `generate` script (`tsx --env-file=.env sr
 from source against a real server into `examples/moca.generated.ts`, per the repo's `mocakit.config.ts`.
 
 The CLI prints warnings (introspection skips, emit de-duplication/drops/skips, name collisions) to stderr as
-`warning: …`, at most 50 in total, followed by `…and N more warnings` if there were more (`emit` still returns all
-of them). It finishes with `Wrote N commands to <out>` (or `Would write …` with `--dry-run`), where `N` is the
+`warning: …`, at most 50 in total, followed by `... and N more warnings (use --verbose to see all)` if there were
+more (`emit` still returns all of them). `--verbose` prints every warning. It finishes with `Wrote N commands to <out>` (or `Would write …` with `--dry-run`), where `N` is the
 number of commands actually emitted, after filtering, de-duplication and skips.
 
 ### Introspection
@@ -469,16 +469,19 @@ A single `moca.generated.ts`, deterministic for a given snapshot (input order do
 Argument names, in server order:
 
 - **Wildcards** (`@*`, `*`, `@+*`, or any name ending in `.*` with or without an `@`/`@+` prefix, e.g.
-  `@+invdtl.*`) mean "passes through whatever stack/where arguments are present". The argument is removed
-  **silently** and the method's JSDoc gains `Accepts additional arguments (@*): pass them via opts.extraArgs.`
+  `@+widget.*`) mean "passes through whatever stack/where arguments are present". The argument is removed
+  **silently** and the method's JSDoc gains `Accepts additional arguments (wildcard: <raw name>): pass them via
+  opts.extraArgs.`, naming the first wildcard the command lists (sanitised like other server text, so `@*` appears
+  as `\@*`).
 - **`@name` / `@+name`** refers to argument `name` read from the stack. One leading `@+` or `@` is stripped before
   validation; the interface, spec table and rendered `where` clause all use the bare name.
 - A name that is still not a valid MOCA argument name (`/^[A-Za-z_][A-Za-z0-9_]*$/`, the rule `renderCommand`
   enforces; e.g. a leading digit or spaces) is dropped with a warning when optional. When it is **required**, the
   command could never be called, so it is skipped with a warning.
-- Repeated names are de-duplicated case-insensitively on the bare name (first wins). This warns when the raw
-  spellings are equal ignoring case (`wh_id` / `WH_ID`). It is silent when they differ only by the `@` prefix
-  (`wh_id` / `@wh_id`).
+- Repeated names are merged case-insensitively on the bare name, at the first entry's position. The merged
+  argument keeps the first entry's name and dtype, except that when exactly one of the two is stack-typed (below),
+  the non-stack entry wins. It is required if either entry is required. This warns when the raw spellings are equal
+  ignoring case (`wh_id` / `WH_ID`). It is silent when they differ only by the `@` prefix (`wh_id` / `@wh_id`).
 - **Stack-typed** arguments (`POINTER`, `RESULTS`, `OBJECT`, `BINARY`; see the table below) can't be sent as
   `where`-clause literals. An **optional** one is left out of the interface and spec table, with no warning, and
   listed in the method's JSDoc: `Stack-only arguments not settable here: result_set (RESULTS), …`. A **required**
@@ -515,7 +518,7 @@ The file contains:
     listActiveCommands: mk.OptionalArgsCommand<mk.NoArgs, "list active commands">; // no required args
     /**
      * `process widgets` · level: wmd
-     * Accepts additional arguments (@*): pass them via opts.extraArgs.
+     * Accepts additional arguments (wildcard: \@*): pass them via opts.extraArgs.
      * Stack-only arguments not settable here: result_set (RESULTS)
      */
     processWidgets: mk.Command<ProcessWidgetsArgs, "process widgets">;
@@ -611,7 +614,8 @@ Confirmed on a live server (a snapshot of 10,354 active commands) with the live 
    not needed there (it stays for other servers).
 3. **Type codes.** `argtyp` takes exactly nine values: `STRING`, `INTEGER`, `FLOAT`, `FLAG`, `UNKNOWN`, `POINTER`,
    `RESULTS`, `OBJECT`, `BINARY`. There is no date type. Result-column types are single letters (`S`, `I`, `O`, …).
-   Argument names include wildcards (`@*` on 688 arguments, plus a few `*`, `@+invdtl.*`, `foo.*`), about 70
+   Argument names include wildcards (`@*` on 688 arguments, plus a few `*` and table-qualified `name.*` forms,
+   some with an `@+` prefix), about 70
    `@name` stack references, and a handful of invalid names (a leading digit, spaces). §11 describes how each is
    handled.
 4. **Still open: empty `<field></field>`.** Whether MOCA ever sends an empty field for an empty string (mocakit

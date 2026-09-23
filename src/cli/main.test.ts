@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,6 +60,30 @@ describe('runCli', () => {
     const out = join(dir, 'moca.ts');
     expect(await runCli(['generate', '--from-snapshot', fixture, '--out', out], io, dir)).toBe(0);
     expect(await readFile(out, 'utf8')).toContain('createMoca');
+  });
+
+  it('documents --verbose in the usage text', async () => {
+    const { io, out } = capture();
+    await runCli(['--help'], io);
+    expect(out.join('\n')).toMatch(/--verbose\s+Print every warning/);
+  });
+
+  it('passes --verbose through, printing every warning', async () => {
+    const dir = await tempDir();
+    const commands = Array.from({ length: 51 }, (_, i) => ({
+      name: `cmd ${String(i).padStart(2, '0')}`,
+      args: [{ name: 'bad-name', dtype: 'STRING', required: false }],
+    }));
+    const snapshotFile = join(dir, 'snap.json');
+    await writeFile(snapshotFile, JSON.stringify({ mocakitVersion: '0.1.0', generatedAt: '', server: 'https://moca.test', commands }));
+
+    const quiet = capture();
+    expect(await runCli(['generate', '--from-snapshot', snapshotFile, '--dry-run'], quiet.io, dir)).toBe(0);
+    expect(quiet.err.at(-1)).toBe('... and 1 more warnings (use --verbose to see all)');
+
+    const verbose = capture();
+    expect(await runCli(['generate', '--from-snapshot', snapshotFile, '--dry-run', '--verbose'], verbose.io, dir)).toBe(0);
+    expect(verbose.err).toHaveLength(51);
   });
 
   it('returns 1 and reports errors without a stack trace', async () => {
