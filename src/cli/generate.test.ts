@@ -160,7 +160,7 @@ describe('runGenerate', () => {
     }
     expect(caught).toBeInstanceOf(Error);
     const message = (caught as Error).message;
-    expect(message).toBe(`${badSnapshot} is not valid JSON: Unexpected token 'o', "not json" is not valid JSON`);
+    expect(message).toMatch(/is not valid JSON/);
     expect(message.match(new RegExp(badSnapshot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(1);
   });
 

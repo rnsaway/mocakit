@@ -43,7 +43,7 @@ async function importConfig(path: string): Promise<MocakitConfig> {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes('await is only valid')) {
-        throw new Error(`${path} cannot use top-level await (config files are loaded synchronously)`);
+        throw new Error(`${path} cannot use top-level await (config files, and modules they import, are loaded synchronously)`);
       }
       throw error;
     }

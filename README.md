@@ -32,9 +32,22 @@ export default defineConfig({
 });
 ```
 
+Don't put the password on the command line, where it can end up in shell history or a process list. Export the
+connection as environment variables instead:
+
 ```bash
-MOCA_URL=https://moca.example.com:4700/service MOCA_USER=me MOCA_PASSWORD=secret npx mocakit generate
+export MOCA_URL=https://moca.example.com:4700/service MOCA_USER=me MOCA_PASSWORD=secret
+npx mocakit generate
 ```
+
+or keep them in a `.env` file (gitignored) and load it explicitly:
+
+```bash
+node --env-file=.env node_modules/.bin/mocakit generate
+```
+
+or add `"moca:generate": "node --env-file=.env node_modules/.bin/mocakit generate"` to `package.json` and run
+`npm run moca:generate`.
 
 This writes `src/moca.generated.ts` and, next to it, a `src/moca.commands.json` snapshot. **Commit both files.**
 The snapshot lets you regenerate without contacting the server — for example in CI, or after only changing
@@ -45,14 +58,14 @@ npx mocakit generate --from-snapshot src/moca.commands.json
 ```
 
 Other flags: `--config <path>` (default: `mocakit.config.{ts,mts,mjs,js,json}` in the cwd), `--out <path>`,
-`--dry-run` (introspect/report without writing).
+`--dry-run` (introspect/report without writing). Run `mocakit generate --help` for the full list.
 
 ### Config files
 
 - **Config files are executed code**, not declarative data — a `.ts`/`.mjs`/`.js` config is loaded and its default
   export is used as-is. Don't load a config you didn't write.
-- **No top-level `await`.** Config files are loaded synchronously; a config with top-level `await` fails with a
-  clear error rather than an obscure one from the loader.
+- **No top-level `await`.** Config files, and any modules they import, are loaded synchronously; a config with
+  top-level `await` fails with a clear error rather than an obscure one from the loader.
 - The config file is **optional** if `MOCA_URL`, `MOCA_USER` and `MOCA_PASSWORD` are all set in the environment
   (or you pass `--from-snapshot`). Prefer taking the password from the environment rather than writing it into the
   config file, so it never ends up committed.
@@ -93,9 +106,24 @@ const full = await moca.listOrders({ wh_id: 'WMD1' }, { format: 'full' });
 const raw = await moca.exec("[select count(*) cnt from ord]");
 ```
 
-Generated methods live as non-enumerable properties on the client's prototype, typed through `mk.Command` /
-`mk.OptionalArgsCommand` rather than emitted as real class methods — this keeps type-checking cheap even with
-thousands of commands.
+Method names come from the MOCA command name, split on whitespace/punctuation and camelCased: `list orders` →
+`listOrders`. A name that would collide with a client member (`exec`, `call`, `login`, `logout`, `session`, `then`,
+…) gets a `cmd` prefix instead (e.g. a command literally named `login` becomes `cmdLogin`). Two commands that
+camelCase to the same name get `_2`, `_3`, … suffixes, and `mocakit generate` prints a warning when that happens.
+
+### Client config
+
+Besides `url`/`username`/`password`, `createMoca`/`MocaConfig` also accepts:
+
+| Field | Default | Notes |
+|---|---|---|
+| `warehouse` | — | Sent as `WH_ID` |
+| `device` | — | Sent as `DEVCOD` |
+| `locale` | login locale | Sent as `LOCALE_ID` |
+| `ignoreSslIssues` | `false` | Skip TLS verification |
+| `timeoutMs` | `300000` | Per HTTP request |
+| `session` | see [Sessions](#sessions) | `{ reuse?, maxAgeMinutes?, store? }` |
+| `defaults` | — | Client-wide call defaults: `{ convert?, noRowsIsError?, autocommit? }` |
 
 ### Argument rendering
 
@@ -103,14 +131,32 @@ Arguments are rendered into a MOCA `where` clause (`list orders where wh_id = 'W
 
 - `null` and `undefined` arguments are **removed from the command entirely** — never sent as `''`. A missing
   required argument throws `MocaArgumentError` (and TypeScript catches it at compile time too).
+- Strings are single-quoted, with an embedded `'` doubled (`it's` → `'it''s'`).
 - Numbers are sent unquoted. `NaN`/`Infinity`, integers beyond `Number.MAX_SAFE_INTEGER`, and values whose JS
   string form needs exponent notation (e.g. `1e21`, `1e-7`) throw `MocaArgumentError` — pass those as strings
   instead.
 - Booleans are sent as `1` / `0`.
 - `Date` values are sent as a quoted 14-digit string, `YYYYMMDDHH24MISS`, in the local time zone:
-  `new Date(2026, 8, 22, 14, 5, 9)` → `'20260922140509'`.
+  `new Date(2026, 8, 22, 14, 5, 9)` → `'20260922140509'`. An invalid `Date` (e.g. `new Date('nope')`) throws
+  `MocaArgumentError`.
 - Arguments not declared on the command go through `{ extraArgs: { ... } }`.
-- Argument names are matched case-insensitively, since MOCA itself is case-insensitive about them.
+- **Argument names must use the declared spelling.** A different casing of a declared name throws
+  `MocaArgumentError` naming the correct spelling, and a case-insensitive duplicate within `extraArgs` also
+  throws — MOCA's own case-insensitivity is used to catch these mistakes, not to accept them silently.
+
+### Call options
+
+Every call (`exec`, `call`, and every generated method) accepts:
+
+| Field | Default | Notes |
+|---|---|---|
+| `format` | `'rows'` | `'rows'` → `T[]`; `'full'` → `{ status, message, columns, rows }` |
+| `convert` | `true` | Type-convert values from column metadata |
+| `noRowsIsError` | `false` | Status 510 throws instead of returning `[]` |
+| `autocommit` | `true` | The `moca-request autocommit` attribute |
+| `env` | — | Extra/override environment vars for this call only (can't override `USR_ID`/`SESSION_KEY`) |
+| `extraArgs` | — | Undeclared arguments, appended to the `where` clause |
+| `signal` | — | Aborts the HTTP request |
 
 ## Typing outputs
 
@@ -119,6 +165,8 @@ the shapes you know once, via module augmentation:
 
 ```ts
 // e.g. src/moca-outputs.d.ts
+import 'mocakit';
+
 declare module 'mocakit' {
   interface MocaOutputs {
     'list orders': { ordnum: string; wh_id: string; ordqty: number };
@@ -126,8 +174,10 @@ declare module 'mocakit' {
 }
 ```
 
-The augmentation file must use the **same module format** (ESM vs. CJS) as the code that consumes it, or
-TypeScript won't merge the two declarations of `MocaOutputs`.
+The `import 'mocakit'` is required: without any import, this file has no top-level `import`/`export` and
+TypeScript treats it as an ambient script rather than a module, so its `declare module 'mocakit'` **replaces**
+the package's own types instead of adding to them. The file must also use the **same module format** (ESM vs.
+CJS) as the code that consumes it, or TypeScript won't merge the two declarations of `MocaOutputs`.
 
 You can also override the type at a single call site: `moca.listOrders<MyOrder>({ wh_id: 'WMD1' })`. Note that the
 generic is wrapped in `NoInfer`, so it can **only be set explicitly this way** — it is never inferred from a type
@@ -174,8 +224,11 @@ try {
 }
 ```
 
-- **Passwords are redacted** wherever an error could otherwise leak one: in `error.command` (the rendered MOCA
-  text), in `error.args`, and via the error's own `toJSON()` (so `JSON.stringify(error)` is safe too).
+- **Values are redacted** in `error.command` (the rendered MOCA text), `error.args`, and the error's own
+  `toJSON()` (so `JSON.stringify(error)` is safe too) — but only for arguments whose *name* contains `pswd`,
+  `passwd` or `password` (case-insensitive), which covers the login command and any command with a similarly
+  named argument. This is not a general secret scanner: a secret passed under a differently named argument is
+  not redacted.
 - **No automatic retries** of commands, since they can have side effects — the one exception is a single retry
   after a 523 (session expired), which re-logs in and resends exactly once. A second 523 throws `MocaAuthError`.
 - `USR_ID` and `SESSION_KEY` cannot be overridden via `opts.env` on a per-call basis — that would let a caller
@@ -200,17 +253,31 @@ keys (or re-hash them with a secret) — anyone who can read a key and knows the
 brute-force a short password offline.
 
 Call `await moca.login()` to fail fast at startup instead of on the first real request, and `await moca.logout()`
-to end the session. With the default `session.reuse: true`, `logout()` ends the session for **every** client
-sharing those credentials, not just the one you called it on.
+to end the session. `logout()` evicts the cached session even if the server-side logout call itself fails (the
+error is still rethrown after the eviction). With the default `session.reuse: true`, `logout()` ends the session
+for **every** client sharing those credentials, not just the one you called it on.
 
 Every call accepts `{ signal }` to abort the underlying HTTP request (and, if you're still waiting on a shared
 login, to stop waiting on it without cancelling that login for other callers).
 
 ## Caveats
 
-- Generated commands are installed as **properties** on the prototype, not real methods. If you subclass the
-  generated `Moca` class, override one by assigning a property (`this.listOrders = ...` or a class field), not by
-  declaring a same-named method — a `class` method declaration doesn't override a property the same way.
+- Generated commands are typed through shared callable interfaces (`mk.Command<Args, CommandName>` /
+  `mk.OptionalArgsCommand<Args, CommandName>`) and installed as **properties** on the prototype, not as real
+  class methods — this keeps type-checking cheap even with thousands of commands. One consequence: if you
+  subclass the generated `Moca` class, you can't override a command with a `class` method declaration.
+  TypeScript rejects it (error TS2425, "Class field ... defined by the parent class is not accessible in the
+  derived class"), because a property can't be overridden by a method. Override it as a property instead:
+
+  ```ts
+  class MyMoca extends Moca {
+    override listOrders: Moca['listOrders'] = (args, opts) => {
+      // ... custom behavior ...
+      return super.listOrders(args, opts as any);
+    };
+  }
+  ```
+
 - Don't detach a command from its client (`const f = moca.listOrders; f(...)`) — it relies on `this`, which is
   lost once it's called unbound. Call it as `moca.listOrders(...)`, or bind it explicitly if you need a reference.
 

@@ -104,7 +104,7 @@ describe('loadConfig', () => {
     const path = join(dir, 'mocakit.config.ts');
     await writeFile(path, 'await Promise.resolve();\nexport default {};\n');
     await expect(loadConfig(undefined, dir)).rejects.toThrow(
-      `${path} cannot use top-level await (config files are loaded synchronously)`,
+      `${path} cannot use top-level await (config files, and modules they import, are loaded synchronously)`,
     );
   });
 });

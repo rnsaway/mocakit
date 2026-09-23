@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MocaClient } from '../src/client/client.js';
 import { introspect } from '../src/codegen/introspect.js';
-import { classifyMocaType } from '../src/protocol/moca-types.js';
 
 const live = process.env.MOCA_URL ? describe : describe.skip;
 
@@ -16,13 +15,13 @@ live('live MOCA server', () => {
       url: process.env.MOCA_URL!,
       username: process.env.MOCA_USER!,
       password: process.env.MOCA_PASSWORD!,
-      ignoreSslIssues: process.env.MOCA_IGNORE_SSL === 'true',
+      ignoreSslIssues: /^(1|yes|true)$/i.test(process.env.MOCA_IGNORE_SSL ?? ''),
       session: { reuse: false },
     });
   });
 
   afterAll(async () => {
-    await client.logout();
+    await client?.logout();
   });
 
   it('logs in', async () => {
@@ -37,15 +36,19 @@ live('live MOCA server', () => {
     expect(result.rows.length).toBeGreaterThan(0);
   }, 120_000);
 
-  it('lists active command arguments (prints columns and dtype codes)', async () => {
+  it('lists active command arguments (prints columns and their distinct values)', async () => {
     const result = await client
       .exec('list active command arguments', { format: 'full' })
       .catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))));
     console.log('unfiltered list active command arguments:', result);
     if (result instanceof Error) return;
-    const dtypeColumn = Object.keys(result.rows[0] ?? {}).find((k) => /type/i.test(k));
-    const codes = new Set(result.rows.map((r) => String(dtypeColumn ? r[dtypeColumn] : '')));
-    console.log('dtype codes:', [...codes].map((c) => `${c}→${classifyMocaType(c)}`));
+    // Log every column's distinct values (capped) rather than guessing which one is the dtype
+    // column, so all candidates -- dtype, required flag, whatever else -- can be read by eye.
+    const columns = Object.keys(result.rows[0] ?? {});
+    for (const column of columns) {
+      const values = [...new Set(result.rows.map((r) => String(r[column])))];
+      console.log(`column "${column}" (${values.length} distinct):`, values.slice(0, 30));
+    }
   }, 120_000);
 
   it('introspects', async () => {

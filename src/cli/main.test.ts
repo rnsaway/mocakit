@@ -37,6 +37,18 @@ describe('runCli', () => {
     expect(out.join('\n')).toMatch(/Usage: mocakit generate/);
   });
 
+  it('prints usage and returns 0 for generate --help', async () => {
+    const { io, out } = capture();
+    expect(await runCli(['generate', '--help'], io)).toBe(0);
+    expect(out.join('\n')).toMatch(/Usage: mocakit generate/);
+  });
+
+  it('prints usage and returns 0 for generate -h', async () => {
+    const { io, out } = capture();
+    expect(await runCli(['generate', '-h'], io)).toBe(0);
+    expect(out.join('\n')).toMatch(/Usage: mocakit generate/);
+  });
+
   it('rejects unknown flags', async () => {
     const { io } = capture();
     expect(await runCli(['generate', '--nope'], io)).toBe(1);
