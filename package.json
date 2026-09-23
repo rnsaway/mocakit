@@ -34,7 +34,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "generate": "tsx src/cli.ts generate",
-    "prepublishOnly": "npm run build"
+    "prepare": "npm run build"
   },
   "dependencies": {
     "jiti": "^2.7.0",

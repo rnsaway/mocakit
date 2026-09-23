@@ -595,7 +595,11 @@ case-insensitively. All optional argument types also accept `null`, which remove
 - Build with `tsup`. TypeScript `strict`.
 - Runtime dependencies: `undici` (for the `Agent`; same major as Node's bundled version). CLI-only dependency:
   `jiti`.
-- Scripts: `build`, `test`, `typecheck`, `generate`. (No linter in v1.)
+- Scripts: `build`, `test`, `typecheck`, `generate`, `prepare`. (No linter in v1.)
+- `prepare` runs `npm run build`. npm runs it on a plain `npm install` in the repo, when the package is installed
+  from git (`npm install "git+https://…#branch"`, which is how it's consumed before it's on a registry), and before
+  `npm pack` / `npm publish`, so there is no separate `prepublishOnly`. `files: ["dist"]` keeps the tarball to
+  the build output.
 
 ## 13. Testing
 

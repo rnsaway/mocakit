@@ -16,6 +16,13 @@ MOCA command on your instance into a typed function.
 npm install mocakit
 ```
 
+Or install straight from git (any branch, tag or commit). The package's `prepare` script builds `dist/` during the
+install, so no prebuilt files need to be committed:
+
+```bash
+npm install "git+https://<git-host>/<owner>/mocakit.git#<branch-or-tag>"
+```
+
 ## Generate a typed client
 
 `mocakit generate` introspects a live MOCA instance (`list active commands` and `list active command arguments`)
@@ -124,6 +131,29 @@ export default defineConfig({
   levels: ['wmd', 'usrint'],         // component-level allowlist, case-insensitive
 });
 ```
+
+### Keeping it small
+
+Generating everything is rarely what you want. A full instance can have around 10,000 active commands, which comes
+to roughly 6.7 MB of generated TypeScript, and type-checking that file alone takes `tsc` about 3.5 s and 1.1 GB of
+memory. Generate only the commands your project calls, using `include`, `exclude` and `levels` in
+`mocakit.config.ts`:
+
+```ts
+// mocakit.config.ts
+import { defineConfig } from 'mocakit';
+
+export default defineConfig({
+  out: 'src/moca.generated.ts',
+  include: ['list order*', 'list shipment*', 'list inventory*', 'create order*', 'change order*'],
+  exclude: ['* debug *', '* test *'],
+  levels: ['usrint', 'wmd'],   // only your own and the WMD component levels
+});
+```
+
+Because the snapshot is always unfiltered, you can widen or narrow the filters later and rerun
+`npx mocakit generate --from-snapshot src/moca.commands.json` without contacting the server. Commands you didn't
+generate are still callable via `exec()`.
 
 ## Use it
 
