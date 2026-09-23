@@ -277,14 +277,17 @@ Rules:
   | MOCA column type | JS value |
   |---|---|
   | `I`, `L`, `F`, `N`, `J`, `INTEGER`, `LONG`, `FLOAT`, `DOUBLE`, `NUMBER`, `NUMERIC` | `number` when the text is a finite decimal (optional sign and exponent); integers beyond `Number.MAX_SAFE_INTEGER` and other text stay strings |
-  | `O`, `BOOLEAN`, `BOOL` | `boolean` (`1`/`true` → `true`, `0`/`false` → `false`, case-insensitive, trimmed); other text stays a string |
+  | `O`, `FLAG`, `BOOLEAN`, `BOOL` | `boolean` (`1`/`true` → `true`, `0`/`false` → `false`, case-insensitive, trimmed); other text stays a string |
   | `D`, `DATE`, `DATETIME`, `TIMESTAMP` | `string` (unchanged MOCA date string) |
   | nested `moca-results` | `MocaRow[]` (recursively converted) |
-  | anything else | `string` |
+  | anything else (including `S`, `STRING`, `UNKNOWN`, `POINTER`, `RESULTS`, `OBJECT`, `BINARY`) | `string` |
   | NULL field | `null` |
 
-  Codes are matched case-insensitively after trimming. The same classification drives the dtype → TS mapping in
-  §11. The table is still to be confirmed against a live server (§14); unknown codes fall back to string.
+  Codes are matched case-insensitively after trimming; unknown codes fall back to string. A live server (§14)
+  sends result-column types as single letters (`S`, `I`, `O` seen). The word codes are the `argtyp` vocabulary
+  of `list active command arguments`. The same classifier (`classifyMocaType`) serves both and drives the dtype → TS
+  mapping in §11, where `UNKNOWN` and the stack types have their own kinds (`any`, `stack`). For result columns
+  those kinds convert like `string`.
 - `convert: false` leaves every value as `string | null` or nested rows.
 - Status 510 returns `[]` unless `noRowsIsError` is set.
 - `parseMocaDate(s: string): Date` is exported as a helper (§8a).
@@ -427,26 +430,29 @@ their `package.json`. This repo has a `generate` script (`tsx --env-file=.env sr
 from source against a real server into `examples/moca.generated.ts`, per the repo's `mocakit.config.ts`.
 
 The CLI prints warnings (introspection skips, emit de-duplication/drops/skips, name collisions) to stderr as
-`warning: …`, and finishes with `Wrote N commands to <out>` (or `Would write …` with `--dry-run`), where `N` is the
+`warning: …`, at most 50 in total, followed by `…and N more warnings` if there were more (`emit` still returns all
+of them). It finishes with `Wrote N commands to <out>` (or `Would write …` with `--dry-run`), where `N` is the
 number of commands actually emitted, after filtering, de-duplication and skips.
 
 ### Introspection
 
-1. `list active commands` runs once, unfiltered. It captures command name, component level, command type and
-   description.
+1. `list active commands` runs once, unfiltered. It captures command name (`command`), component level
+   (`cmplvl`), command type (`type`, e.g. `Local Syntax`, `Java Method`) and description (`desc`).
    Names are trimmed and internal whitespace collapsed; commands are de-duplicated case- and
    whitespace-insensitively (first row wins). A name that doesn't match `/^[A-Za-z0-9_][A-Za-z0-9_ .\-]*$/` after
    trimming is skipped with a warning (returned in `warnings`), so it is never queried or emitted. No commands at all
    is an error.
-2. `list active command arguments` runs once, unfiltered. It captures command, argument name, dtype, required flag
-   (`1`/`y`/`yes`/`t`/`true`) and description. If the unfiltered call fails with a `MocaCommandError` **or returns
+2. `list active command arguments` runs once, unfiltered. It captures command (`command`), argument name
+   (`argnam`), dtype (`argtyp`), required flag (`argreq`, an `O` column; `1`/`y`/`yes`/`t`/`true`) and description
+   when the server has one. Argument names are stored **raw** (`@*`, `@wh_id`, …); `emit` interprets them. If the unfiltered call fails with a `MocaCommandError` **or returns
    zero rows**, the generator first probes with a single `list active command arguments where command = '...'` for
    the first command; if that also fails it throws one error describing both failures. Otherwise it fans out
    per-command calls (concurrency 8 by default, `IntrospectOptions.concurrency`), aborting the rest on the first
    failure. Any other error from the unfiltered call propagates unchanged.
 3. Columns are matched case-insensitively against a candidate list per field. If a required field can't be
    matched, the generator fails with an error that lists the columns actually received; two fields resolving to the
-   same column is also an error. The candidate lists are still to be confirmed against a live server (§14).
+   same column is also an error. The columns a live server returns are recorded in §14 and all resolve through
+   the candidate lists. The other candidates are kept for older or customised servers.
 4. The full, unfiltered `Snapshot` (`{ mocakitVersion, generatedAt, server, commands: [...] }`, `server` with
    credentials/query/hash removed, commands sorted by code unit, argument order preserved) is written to
    `snapshot`, so filters can change without re-introspecting. If the file already exists and its `commands` are
@@ -458,14 +464,29 @@ number of commands actually emitted, after filtering, de-duplication and skips.
 ### Emitted file
 
 A single `moca.generated.ts`, deterministic for a given snapshot (input order doesn't matter). Before emitting,
-`emit` normalises the command list, pushing a warning for each change:
+`emit` normalises the command list. The snapshot is never changed; all of this happens in `emit`.
 
-- A command with a **required** argument whose name isn't a valid MOCA argument name
-  (`/^[A-Za-z_][A-Za-z0-9_]*$/`, the rule `renderCommand` enforces) could never be called, so the whole command is
-  skipped.
-- Commands are de-duplicated case- and whitespace-insensitively; the lowest code-unit name wins.
-- An **optional** argument with an invalid name is dropped.
-- Repeated argument names within a command are de-duplicated case-insensitively (first wins).
+Argument names, in server order:
+
+- **Wildcards** (`@*`, `*`, `@+*`, or any name ending in `.*` with or without an `@`/`@+` prefix, e.g.
+  `@+invdtl.*`) mean "passes through whatever stack/where arguments are present". The argument is removed
+  **silently** and the method's JSDoc gains `Accepts additional arguments (@*): pass them via opts.extraArgs.`
+- **`@name` / `@+name`** refers to argument `name` read from the stack. One leading `@+` or `@` is stripped before
+  validation; the interface, spec table and rendered `where` clause all use the bare name.
+- A name that is still not a valid MOCA argument name (`/^[A-Za-z_][A-Za-z0-9_]*$/`, the rule `renderCommand`
+  enforces; e.g. a leading digit or spaces) is dropped with a warning when optional. When it is **required**, the
+  command could never be called, so it is skipped with a warning.
+- Repeated names are de-duplicated case-insensitively on the bare name (first wins). This warns when the raw
+  spellings are equal ignoring case (`wh_id` / `WH_ID`). It is silent when they differ only by the `@` prefix
+  (`wh_id` / `@wh_id`).
+- **Stack-typed** arguments (`POINTER`, `RESULTS`, `OBJECT`, `BINARY`; see the table below) can't be sent as
+  `where`-clause literals. An **optional** one is left out of the interface and spec table, with no warning, and
+  listed in the method's JSDoc: `Stack-only arguments not settable here: result_set (RESULTS), …`. A **required**
+  one makes the command uncallable this way, so it is skipped with the warning
+  `Command "x" requires stack argument "y" (RESULTS); skipped (run it with exec())`.
+
+Commands are de-duplicated case- and whitespace-insensitively; the lowest code-unit name wins (with a warning).
+Skipped commands don't take part in de-duplication.
 
 `emit` returns `{ code, warnings, count }`, where `count` is the number of commands emitted.
 
@@ -492,6 +513,12 @@ The file contains:
     /** `list orders` · level: wmd · <description> */
     listOrders: mk.Command<ListOrdersArgs, "list orders">;                    // has required args
     listActiveCommands: mk.OptionalArgsCommand<mk.NoArgs, "list active commands">; // no required args
+    /**
+     * `process widgets` · level: wmd
+     * Accepts additional arguments (@*): pass them via opts.extraArgs.
+     * Stack-only arguments not settable here: result_set (RESULTS)
+     */
+    processWidgets: mk.Command<ProcessWidgetsArgs, "process widgets">;
   }
   export class Moca extends mk.MocaClient {}
   mk.defineCommands(Moca.prototype, S); // installs non-enumerable methods that call this.call(spec, args, opts)
@@ -511,16 +538,21 @@ The file contains:
 
 ### dtype → TS type
 
-| dtype | TS type |
-|---|---|
-| string (`S`, …) | `string` |
-| integer / float (`I`, `F`, …) | `number` |
-| boolean (`O`, …) | `boolean` |
-| date (`D`, …) | `string \| Date` |
-| unknown | `string` |
+A live server reports exactly nine `argtyp` values (§14); there is no date argtyp.
 
-The dtype codes are classified exactly like the column types in §8. All optional argument types also accept `null`,
-which removes the argument just like `undefined`. The codes are still to be confirmed against a live server.
+| dtype | kind | TS type |
+|---|---|---|
+| `STRING` (also `S`) | string | `string` |
+| `INTEGER`, `FLOAT` (also `I`, `F`, …) | number | `number` |
+| `FLAG` (also `O`, …) | boolean | `boolean` (rendered `1`/`0`) |
+| `UNKNOWN` | any | `string \| number \| boolean \| Date` (rendered by runtime type, §6) |
+| `POINTER`, `RESULTS`, `OBJECT`, `BINARY` | stack | not emitted: optional → JSDoc note, required → command skipped (above) |
+| date (`D`, …; not seen in `argtyp`) | date | `string \| Date` |
+| anything else | string | `string` |
+
+The dtype codes are classified by the same `classifyMocaType` as the column types in §8, matched
+case-insensitively. All optional argument types also accept `null`, which removes the argument just like
+`undefined`.
 
 ### Naming
 
@@ -532,7 +564,8 @@ which removes the argument just like `undefined`. The codes are still to be conf
   `Object.prototype` name. A test keeps this list in sync with `MocaClient`'s actual members.
 - Collisions after conversion get `_2`, `_3` (in code-unit order of the MOCA name), and the CLI prints a warning.
 - Arg interface names are the method name in PascalCase + `Args`, so they carry the same collision suffixes.
-- Argument names are kept verbatim (only valid MOCA argument names reach this point); `__proto__` is quoted.
+- Argument names are kept verbatim after stripping a leading `@`/`@+` (only valid MOCA argument names reach this
+  point); `__proto__` is quoted.
 
 ## 12. Packaging
 
@@ -561,22 +594,31 @@ which removes the argument just like `undefined`. The codes are still to be conf
   small usage file.
 - **Live** (`test/live.test.ts`, skipped unless `MOCA_URL` is set; prints nothing secret): login (logs the login
   columns), `list active commands` and unfiltered `list active command arguments` (logs columns and distinct
-  values, for §14 items 1–3), full introspection, 510 behavior (`[select 1 x from dual where 1 = 0]` returns `[]`,
+  values; the source of §14 items 1–3), full introspection, 510 behavior (`[select 1 x from dual where 1 = 0]` returns `[]`,
   and throws 510 with `noRowsIsError`; a non-Oracle dialect is logged and skipped), a raw request with a bogus
-  `SESSION_KEY` (logs the status/message and asserts it is non-zero, for §14 item 5), and `runGenerate` with
+  `SESSION_KEY` (logs the status/message and asserts it is non-zero; the source of §14 item 5), and `runGenerate` with
   `dryRun: true` from env vars (asserts `Would write …` and that no files are written).
 
-## 14. Items to confirm against a live server
+## 14. Live-server findings
 
-These don't block the design. The code is written defensively around them, and the live suite (§13) logs what it
-needs to confirm them; none has been confirmed against a live server yet:
+Confirmed on a live server (a snapshot of 10,354 active commands) with the live suite (§13):
 
-1. Column names returned by `list active commands` and `list active command arguments`.
-2. Whether `list active command arguments` works unfiltered.
-3. The dtype and column-type code sets (for the mapping tables in §8 and §11).
-4. Whether MOCA ever sends an empty `<field></field>` for an empty string (mocakit currently reads it as NULL).
-5. That a 523 always means the command did not execute, including when a command makes nested `remote(...)` calls
-   (the single post-523 retry relies on this). The live suite's bogus-`SESSION_KEY` check records which status an
-   invalid session actually produces.
+1. **Columns.** `list active commands` returns `cmplvl, cmplvlseq, command, cmdtyp, type, syntax, class, functn,
+   security, trnstyp, filename, desc, api_level`. mocakit reads `command`, `cmplvl`, `type` (values such as
+   `Local Syntax`, `Java Method`) and `desc`. `list active command arguments` returns `cmplvl, command, argnam,
+   altnam, argtyp, fixval, argidx, argreq`. `argreq` is an `O` (boolean) column.
+2. **Unfiltered arguments call.** `list active command arguments` works unfiltered, so the per-command fallback is
+   not needed there (it stays for other servers).
+3. **Type codes.** `argtyp` takes exactly nine values: `STRING`, `INTEGER`, `FLOAT`, `FLAG`, `UNKNOWN`, `POINTER`,
+   `RESULTS`, `OBJECT`, `BINARY`. There is no date type. Result-column types are single letters (`S`, `I`, `O`, …).
+   Argument names include wildcards (`@*` on 688 arguments, plus a few `*`, `@+invdtl.*`, `foo.*`), about 70
+   `@name` stack references, and a handful of invalid names (a leading digit, spaces). §11 describes how each is
+   handled.
+4. **Still open: empty `<field></field>`.** Whether MOCA ever sends an empty field for an empty string (mocakit
+   currently reads it as NULL). This has not been observed yet.
+5. **523.** A bogus `SESSION_KEY` returns status 523 with the message `Invalid session key.`, and the command is
+   not executed. That is what the single post-523 re-login and retry relies on. (A command making nested
+   `remote(...)` calls was not exercised separately.)
+6. **510.** A no-rows SQL query returns status 510, which mocakit maps to `[]` (or throws with `noRowsIsError`).
 
 (`logout user` is confirmed to exist.)

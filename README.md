@@ -54,6 +54,7 @@ npx mocakit generate --from-snapshot src/moca.commands.json
 If the server's commands haven't changed since the last run, the existing snapshot is left byte-for-byte untouched
 (no `generatedAt` churn). The final `Wrote N commands` line counts the commands actually emitted, and anything the
 generator had to skip or adjust is printed to stderr as a `warning: …` line (see [Method names](#method-names)).
+At most 50 warnings are printed, followed by `…and N more warnings`.
 
 Other flags: `--config <path>` (default: `mocakit.config.{ts,mts,mjs,js,json}` in the cwd), `--out <path>`,
 `--dry-run` (introspect/report without writing). Run `mocakit generate --help` for the full list.
@@ -118,11 +119,50 @@ The generator also warns and adjusts, rather than emitting code that can't work:
 - Commands that differ only in case/whitespace are emitted once (the lowest-sorting name wins).
 - A command name containing anything other than letters, digits, `_`, space, `.` and `-` is skipped (a snapshot
   containing one is rejected).
-- An optional argument whose name isn't a valid MOCA argument name (`[A-Za-z_][A-Za-z0-9_]*`) is dropped; a
-  command with such a *required* argument is skipped entirely, since it could never be called.
+- An optional argument whose name isn't a valid MOCA argument name (`[A-Za-z_][A-Za-z0-9_]*`, checked after
+  removing a leading `@`) is dropped; a command with such a *required* argument is skipped entirely, since it could
+  never be called.
+- A command with a *required* stack-only argument (see [Argument types](#argument-types)) is skipped with
+  `Command "x" requires stack argument "y" (RESULTS); skipped (run it with exec())`.
 
 If you run a generated file against a *newer* mocakit that has added a client member with the same name as one of
 your commands, that command isn't installed (the client member wins) and a process warning tells you to regenerate.
+
+### Argument types
+
+Each argument's MOCA type (`argtyp`) decides its TypeScript type:
+
+| MOCA type | TypeScript type |
+|---|---|
+| `STRING` | `string` |
+| `INTEGER`, `FLOAT` | `number` |
+| `FLAG` | `boolean` (sent as `1` / `0`) |
+| `UNKNOWN` | `string \| number \| boolean \| Date` (each rendered by its runtime type) |
+| `POINTER`, `RESULTS`, `OBJECT`, `BINARY` | not settable (stack-only, see below) |
+
+Optional arguments also accept `null`. MOCA has no date argument type. Pass a `Date` to an `UNKNOWN` argument
+when you want the 14-digit date format.
+
+Argument names the server writes as `@name` (meaning "`name`, read from the stack") are exposed as plain `name`,
+and rendered that way in the `where` clause.
+
+**Stack-only arguments.** `POINTER`, `RESULTS`, `OBJECT` and `BINARY` arguments carry values that only exist on
+the MOCA stack (a result set from an earlier command, for example), so they can't be written as `where`-clause
+literals. An optional one is left off the argument interface, and the method's doc comment lists it:
+`Stack-only arguments not settable here: result_set (RESULTS)`. A command that *requires* one isn't generated
+at all. Run it with `exec()` inside a MOCA pipeline instead:
+
+```ts
+await moca.exec("list orders where wh_id = 'WMD1' | process order results");
+```
+
+**Pass-through commands.** A command whose server definition includes a wildcard argument (`@*`, `*`, or `x.*`)
+forwards whatever arguments it's given to the commands it calls. Its doc comment says
+`Accepts additional arguments (@*): pass them via opts.extraArgs.` Pass those extra arguments through `extraArgs`:
+
+```ts
+await moca.processOrders({ wh_id: 'WMD1' }, { extraArgs: { ordnum: 'A1', client_id: 'C1' } });
+```
 
 ### Client config
 
