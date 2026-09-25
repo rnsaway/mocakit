@@ -504,8 +504,8 @@ Argument names, in server order:
   `marked required by MOCA; not enforced for Local Syntax commands` after the description and dtype. The
   snapshot stays raw: it records `argreq` as the server reports it.
 - A name that is still not a valid MOCA argument name (`/^[A-Za-z_][A-Za-z0-9_]*$/`, the rule `renderCommand`
-  enforces; e.g. a leading digit or spaces) is dropped with a warning when optional. When it is **required**, the
-  command could never be called, so it is skipped with a warning.
+  enforces; e.g. a leading digit or spaces) is dropped with a warning when effectively optional. When it is
+  **effectively required**, the command could never be called, so it is skipped with a warning.
 - Repeated names are merged case-insensitively on the bare name, at the first entry's position. The merged
   argument keeps the first entry's name and dtype, except that when exactly one of the two is stack-typed (below),
   the non-stack entry wins. It is required if either entry is required. This warns when the raw spellings are equal
@@ -664,6 +664,8 @@ Confirmed on a live server (a snapshot of 10,354 active commands) with the live 
    variables do **not** satisfy a required argument: a C/Java command still returns 507 for a missing `wh_id`
    with `WH_ID` set in the environment. On the live instance 2,424 Local Syntax commands carry flagged
    arguments, and 16 were wrongly skipped by the required-stack-argument rule before §11 took the type into
-   account.
+   account. The rule matches the descriptive `type` column (`Local Syntax`), not the coded `cmdtyp`. Any other
+   value, a misspelling, or a missing `type` counts as enforced, so a server that exposed only a coded type would
+   fall back to enforcing every flagged argument: the conservative choice.
 
 (`logout user` is confirmed to exist.)

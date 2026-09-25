@@ -60,7 +60,7 @@ interface EmitCommand extends SnapshotCommand {
   args: EmitArg[];
   /** The first wildcard argument (`@*`, `*`, `x.*`) the server listed, raw: extra arguments pass through. */
   wildcard: string | undefined;
-  /** Optional arguments that can only be passed on the MOCA stack, as `name (DTYPE)`. */
+  /** Effectively optional arguments that can only be passed on the MOCA stack, as `name (DTYPE)`. */
   stackOnly: string[];
 }
 

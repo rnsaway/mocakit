@@ -206,8 +206,8 @@ The generator also warns and adjusts, rather than emitting code that can't work:
 - A command name containing anything other than letters, digits, `_`, space, `.` and `-` is skipped (a snapshot
   containing one is rejected).
 - An optional argument whose name isn't a valid MOCA argument name (`[A-Za-z_][A-Za-z0-9_]*`, checked after
-  removing a leading `@`) is dropped; a command with such a *required* argument is skipped entirely, since it could
-  never be called.
+  removing a leading `@`) is dropped; a command with such an *effectively required* argument (see below) is
+  skipped entirely, since it could never be called.
 - A command with a *required* stack-only argument (see [Argument types](#argument-types)) is skipped with
   `Command "x" requires stack argument "y" (RESULTS); skipped (run it with exec())`.
 - "Required" follows what MOCA actually enforces. MOCA rejects a missing `argreq` argument (status 507) only for

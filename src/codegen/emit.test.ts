@@ -414,6 +414,16 @@ describe('emit', () => {
         }
       });
 
+      it('falls back to enforced for an unknown or misspelled type', () => {
+        for (const type of ['Local Syntx', 'Script', 'LocalSyntax', '']) {
+          const result = typed(type, [{ name: 'a', dtype: 'STRING', required: true }]);
+          expect(result.code, type).toContain('  a: string;');
+          expect(result.code, type).toContain('  cmd: ["cmd", [["a", "STRING", 1]]],');
+          expect(result.code, type).toContain('  cmd: mk.Command<CmdArgs, "cmd">;');
+          expect(result.code, type).not.toContain(NOTE);
+        }
+      });
+
       it('keeps the note after a dedupe merge on a Local Syntax command', () => {
         const result = typed('Local Syntax', [
           { name: 'wh_id', dtype: 'STRING', required: false },

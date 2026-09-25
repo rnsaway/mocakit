@@ -71,20 +71,24 @@ live('live MOCA server', () => {
     expect(snapshot.commands.some((c) => c.args.length > 0)).toBe(true);
   }, 600_000);
 
-  it('enforces a flagged argument on a compiled command with status 507 (spec §14)', async () => {
+  it('enforces a flagged argument on a compiled command with status 507 (spec §14)', async (ctx) => {
     snapshot ??= (await introspect(client, { version: 'live', server: process.env.MOCA_URL! })).snapshot;
-    const compiled = new Set(['c function', 'java method']);
+    const compiled = new Set(['c function', 'simple c function', 'java method']);
     const stackTypes = new Set(['POINTER', 'RESULTS', 'OBJECT', 'BINARY']);
     const command = snapshot.commands.find((c) => {
       if (!compiled.has(c.type?.trim().toLowerCase() ?? '') || !c.name.startsWith('list ')) return false;
       const flagged = c.args.filter((a) => a.required);
       return flagged.length === 1 && !stackTypes.has(flagged[0]!.dtype.trim().toUpperCase());
     });
-    expect(command, 'a list command of type C Function or Java Method with one flagged argument').toBeDefined();
+    if (!command) {
+      console.log('no list command of a compiled type with exactly one flagged non-stack argument; skipped');
+      return ctx.skip();
+    }
     // Read-only: a `list` command, called without its one required argument, so MOCA rejects it.
-    const error = await client.exec(command!.name).catch((e: unknown) => e);
+    const error = await client.exec(command.name).catch((e: unknown) => e);
     console.log('missing required argument -> status', error instanceof MocaCommandError ? error.status : 'not a MocaCommandError');
-    expect(error).toBeInstanceOf(MocaCommandError);
+    // Plain boolean checks: a failed toBeInstanceOf would print the value, which could hold result rows.
+    expect(error instanceof MocaCommandError).toBe(true);
     expect((error as MocaCommandError).status).toBe(507);
   }, 600_000);
 
