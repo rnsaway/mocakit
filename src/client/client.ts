@@ -361,7 +361,9 @@ export class MocaClient {
     const { username, password } = this.#config;
     const command = `login user where usr_id = ${quoteMocaString(username)} and usr_pswd = ${quoteMocaString(password)}`;
     try {
-      const response = await this.#post(command, { USR_ID: username }, false, undefined);
+      // autocommit="true": with "false", MOCA leaves the (empty) transaction open on the pooled
+      // database connection that served the login, where an unrelated later request inherits it.
+      const response = await this.#post(command, { USR_ID: username }, true, undefined);
       if (response.status !== MOCA_STATUS.OK) {
         throw new MocaAuthError(
           `MOCA login failed with status ${response.status}${response.message ? `: ${response.message}` : ''}`,

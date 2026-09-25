@@ -31,7 +31,7 @@ describe('MocaClient.exec', () => {
 
     expect(requests[0]).toMatchObject({
       query: `login user where usr_id = 'JDOE' and usr_pswd = 'p''w'`,
-      autocommit: false,
+      autocommit: true,
       env: { USR_ID: 'JDOE' },
     });
     expect(requests[1]).toMatchObject({
@@ -39,6 +39,15 @@ describe('MocaClient.exec', () => {
       autocommit: true,
       env: { USR_ID: 'JDOE', SESSION_KEY: 'KEY1', WH_ID: 'WMD1', LOCALE_ID: 'US_ENGLISH' },
     });
+  });
+
+  it('sends login user with autocommit=true, so the login never leaves a transaction open on a pooled connection', async () => {
+    const fake = fakeMoca(() => loginOk());
+    const moca = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    await moca.login();
+    expect(fake.requests).toHaveLength(1);
+    expect(fake.requests[0]!.query.startsWith('login user')).toBe(true);
+    expect(fake.requests[0]!.autocommit).toBe(true);
   });
 
   it('reuses the session for later calls', async () => {
