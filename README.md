@@ -455,8 +455,10 @@ mocakit gives you instead works inside a single request:
 - **A batch returns only the last step's rows**, because that is what MOCA returns for `A ; B`. Put the query whose
   rows you want last.
 - **Don't put `[commit]` in dryRun or batch text.** It makes everything before it permanent, so the rollback (or a
-  later failing step) can't undo it. mocakit rejects `[commit]` in `exec` and `batch` text when `dryRun` is set, but
-  it can't see commits made inside commands.
+  later failing step) can't undo it. When `dryRun` is set, mocakit rejects `exec` and `batch` text that has the
+  word `commit` anywhere inside a `[...]` block (`[commit]`, `[insert ...; commit]`, `[begin tran commit tran]`).
+  That check is **best-effort**: it can't see commits made inside MOCA commands, and it may also reject SQL whose
+  column or string literal is literally named `commit` (names like `commit_dte` or `commitment` are fine).
 - **`exec` and `b.raw()` text must be balanced MOCA** (matching braces and brackets). The text is placed inside
   `try { ... }` for dryRun and inside `{ ... }` for a batch step, so an unbalanced brace would change what gets
   rolled back or grouped.

@@ -23,9 +23,12 @@ describe('buildRequest', () => {
     );
   });
 
-  it('defaults autocommit to true and honours false', () => {
-    expect(buildRequest('x')).toContain('autocommit="true"');
-    expect(buildRequest('x', {}, false)).toContain('autocommit="false"');
+  it('always sends autocommit="true" and has no way to send "false"', () => {
+    expect(buildRequest('x')).toContain('<moca-request autocommit="true">');
+    // @ts-expect-error buildRequest takes no autocommit parameter
+    const forced = buildRequest('x', {}, false);
+    expect(forced).toContain('autocommit="true"');
+    expect(forced).not.toContain('autocommit="false"');
   });
 
   it('omits undefined, null and empty environment values', () => {

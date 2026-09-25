@@ -12,7 +12,7 @@ describe('fake-moca helper', () => {
 
   it('records query, env and autocommit', async () => {
     const { transport, requests } = fakeMoca(() => mocaXml(0));
-    await transport({ url: 'u', body: buildRequest("x where a = 'b'", { USR_ID: 'J' }, false), timeoutMs: 1, ignoreSslIssues: false });
-    expect(requests).toEqual([{ url: 'u', query: "x where a = 'b'", env: { USR_ID: 'J' }, autocommit: false }]);
+    await transport({ url: 'u', body: buildRequest("x where a = 'b'", { USR_ID: 'J' }), timeoutMs: 1, ignoreSslIssues: false });
+    expect(requests).toEqual([{ url: 'u', query: "x where a = 'b'", env: { USR_ID: 'J' }, autocommit: true }]);
   });
 });

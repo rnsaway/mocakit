@@ -111,7 +111,7 @@ src/
 
 Each unit has one job and can be tested in isolation:
 
-- **protocol**: `buildRequest(query, env, autocommit = true) → string`, `parseResponse(xml) → RawResponse`
+- **protocol**: `buildRequest(query, env) → string` (always `autocommit="true"`; there is no parameter for it), `parseResponse(xml) → RawResponse`
   (`{ status, message, columns, rows }` with string/null/nested values), `toRows(set, convert) → MocaRow[]`,
   `classifyMocaType(code)`.
 - **transport**: `type Transport = (request: TransportRequest) => Promise<string>`, where `TransportRequest` is
@@ -295,9 +295,11 @@ works within one request:
   started (the command touched no table), and MOCA reports every SQL Server error as 511, so the guard must be the
   catch-all `catch (@?)`. The wrapper leaves nothing open (§14 item 10). Because the request is autocommit, a
   failure of the wrapper itself makes MOCA roll the request back instead of leaving a transaction open.
-  `error.command` is the wrapped text (still redacted). Text matching `/\[\s*commit\b/i` (an explicit
-  `[commit]`) is rejected with `MocaArgumentError` for `exec` and `batch` when `dryRun` is set, since it would
-  make the writes permanent before the rollback.
+  `error.command` is the wrapped text (still redacted). Text matching `/\[[^\]]*\bcommit\b/i` (the word
+  `commit` anywhere inside a `[...]` block: `[commit]`, `[insert ...; commit]`, `[begin tran commit tran]`, after a
+  comment) is rejected with `MocaArgumentError` for `exec` and `batch` when `dryRun` is set, since it would make the
+  writes permanent before the rollback. `commit_dte` and `commitment` pass. The check is best-effort: it can't see
+  commits inside MOCA commands, and it rejects a column or string literal literally named `commit`.
 - **`moca.batch(build, opts?)`** runs several commands in one request, so they commit or roll back together:
 
   ```ts

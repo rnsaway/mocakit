@@ -78,8 +78,13 @@ function wrapDryRun(moca: string): string {
   return `try { ${moca} } finally { try { [rollback] } catch (@?) { noop } }`;
 }
 
-/** An explicit `[commit]` inside dryRun text would make its writes permanent before the rollback. */
-const COMMIT_STATEMENT = /\[\s*commit\b/i;
+/**
+ * A `commit` word anywhere inside a `[...]` SQL block of dryRun text (`[commit]`, `[insert ...; commit]`,
+ * `[begin tran commit tran]`, after a comment, ...) would make the writes permanent before the
+ * rollback. Best-effort: it can't see commits made inside MOCA commands, and it also rejects a
+ * column or string literal literally named `commit` (`commit_dte` and `commitment` pass).
+ */
+const COMMIT_STATEMENT = /\[[^\]]*\bcommit\b/i;
 
 function assertNoCommitInDryRun(moca: string): void {
   if (COMMIT_STATEMENT.test(moca)) {
@@ -477,7 +482,7 @@ export class MocaClient {
   async #post(query: string, environment: MocaEnvironment, signal: AbortSignal | undefined): Promise<RawResponse> {
     const text = await this.#transport({
       url: this.#config.url,
-      body: buildRequest(query, environment, true),
+      body: buildRequest(query, environment),
       timeoutMs: this.#config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       ignoreSslIssues: this.#config.ignoreSslIssues ?? false,
       signal,

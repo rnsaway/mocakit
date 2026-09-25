@@ -23,8 +23,9 @@ All notable changes to mocakit are documented here. The format follows
   rolls back what it wrote. The text is wrapped in
   `try { ... } finally { try { [rollback] } catch (@?) { noop } }` and sent with `autocommit="true"` like every
   request (mocakit never sends `autocommit="false"`), so a failing wrapper is rolled back by MOCA. Per call only:
-  `defaults.dryRun` and non-boolean values throw `MocaArgumentError`, and so does an explicit `[commit]` in dryRun
-  text for `exec` and `batch`.
+  `defaults.dryRun` and non-boolean values throw `MocaArgumentError`, and so does dryRun `exec`/`batch` text with the
+  word `commit` inside a `[...]` block (a best-effort check). `buildRequest` has no `autocommit` parameter any more:
+  it always emits `autocommit="true"`.
 - **`moca.batch((b) => [...steps], opts?)`**: several commands in one request, committed or rolled back together.
   The builder `b` offers every generated command with the same argument types, plus `b.raw(mocaText)`. Arguments
   are validated as each step is built. Resolves to the last step's rows (or the full result with

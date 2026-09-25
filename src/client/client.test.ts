@@ -867,6 +867,31 @@ describe('MocaClient hardening (0.2.0 review)', () => {
       expect(requests[1]!.query).toBe('x');
     });
 
+    it('rejects commit anywhere inside a [...] block of dryRun text, and allows commit-prefixed names', async () => {
+      const { moca, batch, requests } = batchClient();
+      const rejected = [
+        '[insert into t values (1); commit]',
+        '[begin tran commit tran]',
+        '[/*x*/ commit]',
+        '[ -- c\ncommit]',
+      ];
+      for (const text of rejected) {
+        await expect(moca.exec(text, { dryRun: true })).rejects.toThrow(/\[commit\] would defeat dryRun/);
+        await expect(batch((b) => [b.raw(text)], { dryRun: true })).rejects.toThrow(/\[commit\] would defeat dryRun/);
+      }
+      expect(requests).toHaveLength(0);
+      for (const text of ['[commit_dte]', '[commitment]', '[select commit_dte from t]']) {
+        await moca.exec(text, { dryRun: true });
+      }
+      await batch((b) => [b.raw('[commit_dte]'), b.raw('[commitment]')], { dryRun: true });
+      expect(requests.slice(1).map((r) => r.query)).toEqual([
+        DRY_RUN('[commit_dte]'),
+        DRY_RUN('[commitment]'),
+        DRY_RUN('[select commit_dte from t]'),
+        DRY_RUN('{ [commit_dte] } ;\n{ [commitment] }'),
+      ]);
+    });
+
     it('rejects [commit] in dryRun text for exec and batch (including raw steps), without sending', async () => {
       const { moca, batch, requests } = batchClient();
       for (const text of ['[commit]', 'a ; [ COMMIT ]', 'x | [commit work]']) {

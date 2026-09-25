@@ -13,7 +13,12 @@ function assertXmlSafe(value: string, argument: string): void {
   }
 }
 
-export function buildRequest(query: string, environment: MocaEnvironment = {}, autocommit = true): string {
+/**
+ * Builds a `moca-request`. It is always sent with `autocommit="true"`: MOCA then commits at the end of
+ * the request and rolls it back on error, whereas `"false"` leaves the transaction open on a pooled
+ * database connection (spec §14 item 8). There is deliberately no way to send `"false"`.
+ */
+export function buildRequest(query: string, environment: MocaEnvironment = {}): string {
   assertXmlSafe(query, 'query');
 
   const vars = Object.entries(environment)
@@ -26,7 +31,7 @@ export function buildRequest(query: string, environment: MocaEnvironment = {}, a
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    `<moca-request autocommit="${autocommit ? 'true' : 'false'}">`,
+    '<moca-request autocommit="true">',
     '  <environment>',
     ...vars,
     '  </environment>',
