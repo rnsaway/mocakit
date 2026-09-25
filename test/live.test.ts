@@ -143,4 +143,96 @@ live('live MOCA server', () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 600_000);
+
+  // Transactions (spec "Transactions"). SQL Server syntax. Each test uses its own global temp
+  // table, which lives only in tempdb: nothing else on the server is touched. Only statuses,
+  // counts and booleans are logged. (MOCA intercepts `@@name` inside `[...]`, so none is used.)
+  describe('transactions', () => {
+    const stamp = Date.now();
+    const table = (suffix: string): string => `##mk_${stamp}_${suffix}`;
+    const firstValue = (rows: ReadonlyArray<Record<string, unknown>>): number => Number(Object.values(rows[0] ?? {})[0]);
+
+    /** Asked in a separate request, so it sees only what was committed. */
+    async function exists(name: string): Promise<boolean> {
+      const rows = await client.exec(`[select case when object_id('tempdb..${name}') is null then 0 else 1 end present]`);
+      return firstValue(rows) === 1;
+    }
+
+    async function dropIfExists(name: string): Promise<void> {
+      await client.exec(`[if object_id('tempdb..${name}') is not null drop table ${name}]`);
+    }
+
+    it('dryRun returns the rows, then rolls everything back', async () => {
+      const name = table('dry');
+      try {
+        const rows = await client.exec(
+          `[create table ${name} (id int)] ; [insert into ${name} (id) values (1)] ; [select count(*) n from ${name}]`,
+          { dryRun: true },
+        );
+        const count = firstValue(rows);
+        const present = await exists(name);
+        console.log('dryRun: count inside', count, '| table present afterwards', present);
+        expect(count).toBe(1);
+        expect(present).toBe(false);
+      } finally {
+        await dropIfExists(name);
+      }
+    }, 120_000);
+
+    it('batch commits every step at the end of the request', async () => {
+      const name = table('commit');
+      try {
+        await client.batch((b) => [b.raw(`[create table ${name} (id int)]`), b.raw(`[insert into ${name} (id) values (1)]`)]);
+        const present = await exists(name);
+        const count = firstValue(await client.exec(`[select count(*) n from ${name}]`));
+        console.log('batch: table present afterwards', present, '| count', count);
+        expect(present).toBe(true);
+        expect(count).toBe(1);
+      } finally {
+        await dropIfExists(name);
+      }
+      expect(await exists(name)).toBe(false);
+    }, 120_000);
+
+    it('batch rolls back every step when a later step fails', async () => {
+      const name = table('rollback');
+      try {
+        const error = await client
+          .batch((b) => [b.raw(`[create table ${name} (id int)]`), b.raw(`[select id from mk_${stamp}_no_such_table]`)])
+          .catch((e: unknown) => e);
+        const present = await exists(name);
+        console.log(
+          'batch error: status',
+          error instanceof MocaCommandError ? error.status : 'not a MocaCommandError',
+          '| table present afterwards',
+          present,
+        );
+        expect(error instanceof MocaCommandError).toBe(true);
+        expect(present).toBe(false);
+      } finally {
+        await dropIfExists(name);
+      }
+    }, 120_000);
+
+    it('a dryRun batch returns the last step and rolls every step back', async () => {
+      const name = table('drybatch');
+      try {
+        const rows = await client.batch(
+          (b) => [
+            b.raw(`[create table ${name} (id int)]`),
+            b.raw(`[insert into ${name} (id) values (1)]`),
+            b.raw(`[select count(*) n from ${name}]`),
+          ],
+          { dryRun: true },
+        );
+        const count = firstValue(rows);
+        const present = await exists(name);
+        console.log('dryRun batch: count inside', count, '| table present afterwards', present);
+        expect(count).toBe(1);
+        expect(present).toBe(false);
+      } finally {
+        await dropIfExists(name);
+      }
+    }, 120_000);
+  });
 });

@@ -1,7 +1,13 @@
 import type { MocaRow } from './types.js';
 
 export { MOCA_STATUS, MocaClient, type MocaClientDeps } from './client/client.js';
-export { defineCommands, type Command, type OptionalArgsCommand } from './client/commands.js';
+export {
+  defineCommands,
+  type BatchBuilder,
+  type BatchStep,
+  type Command,
+  type OptionalArgsCommand,
+} from './client/commands.js';
 export { formatMocaDate, parseMocaDate } from './dates/codec.js';
 export { defineConfig, type MocakitConfig } from './define-config.js';
 export {
@@ -17,6 +23,7 @@ export { MemorySessionStore, sharedSessionStore, type SessionState, type Session
 export { httpTransport, type Transport, type TransportRequest } from './transport/http.js';
 export type {
   ArgSpec,
+  BatchOptions,
   CallOptions,
   ClientDefaults,
   CommandSpec,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CommandSpec } from '../types.js';
 import { MocaClient } from './client.js';
-import { defineCommands } from './commands.js';
+import { commandSpecOf, defineCommands } from './commands.js';
 
 const LIST_ORDERS: CommandSpec = ['list orders', [['wh_id', 'S', 1]]];
 const EXEC_SPEC: CommandSpec = ['exec', []];
@@ -16,6 +16,15 @@ describe('defineCommands', () => {
     expect(typeof descriptor?.value).toBe('function');
     expect(descriptor).toMatchObject({ enumerable: false, writable: true, configurable: true });
     expect(Object.keys(Sub.prototype)).not.toContain('listOrders');
+  });
+
+  it('attaches the spec to each installed method, readable only through commandSpecOf', () => {
+    const method = (Sub.prototype as unknown as Record<string, unknown>).listOrders;
+    expect(commandSpecOf(method)).toBe(LIST_ORDERS);
+    expect(Object.keys(method as object)).toEqual([]);
+    expect(commandSpecOf(MocaClient.prototype.exec)).toBeUndefined();
+    expect(commandSpecOf(() => undefined)).toBeUndefined();
+    expect(commandSpecOf('listOrders')).toBeUndefined();
   });
 
   it('delegates to call with the spec, args and options', async () => {

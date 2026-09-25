@@ -5,6 +5,9 @@ export const RESERVED_MEMBERS = new Set<string>([
   'login',
   'logout',
   'session',
+  'batch',
+  // Not a client member, but the name of the batch builder's raw-step factory (`b.raw`).
+  'raw',
   'constructor',
   'then',
   ...Object.getOwnPropertyNames(Object.prototype),

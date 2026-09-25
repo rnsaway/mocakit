@@ -12,6 +12,7 @@ import {
 import { MemorySessionStore } from '../session/store.js';
 import type { CommandSpec, MocaConfig } from '../types.js';
 import { MOCA_STATUS, MocaClient } from './client.js';
+import { defineCommands } from './commands.js';
 
 const ORDERS = mocaXml(0, {
   columns: [{ name: 'ordnum', type: 'S' }, { name: 'ordqty', type: 'I' }, { name: 'cancel_flg', type: 'O' }],
@@ -105,10 +106,10 @@ describe('MocaClient.exec', () => {
   });
 
   it('honours client defaults and per-call env overrides', async () => {
-    const { moca, requests } = client(() => ORDERS, { defaults: { autocommit: false, convert: false } });
+    const { moca, requests } = client(() => ORDERS, { defaults: { convert: false } });
     const rows = await moca.exec('x', { env: { WH_ID: 'OVR' } });
     expect(rows).toEqual([{ ordnum: 'A1', ordqty: '5', cancel_flg: '0' }]);
-    expect(requests[1]).toMatchObject({ autocommit: false, env: { WH_ID: 'OVR' } });
+    expect(requests[1]).toMatchObject({ autocommit: true, env: { WH_ID: 'OVR' } });
   });
 });
 
@@ -568,5 +569,203 @@ describe('MocaClient final-review fixes', () => {
     await moca.exec('b');
     expect(requests.map((r) => r.query.split(' ')[0])).toEqual(['login', 'a', 'b']);
     expect(moca.session.active).toBe(true);
+  });
+});
+
+const AUTOCOMMIT_REMOVED =
+  'The autocommit option was removed in mocakit 0.2.0: autocommit=false leaves the transaction open on a pooled database connection. Use { dryRun: true } to roll back, or moca.batch() for several commands in one transaction.';
+
+const DRY_RUN = (text: string): string => `try { ${text} } finally { try { [rollback] } catch (@?) { noop } }`;
+
+describe('MocaClient autocommit (removed in 0.2.0)', () => {
+  it('sends every exec and call with autocommit=true', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    await moca.exec('x');
+    await moca.call(['list orders', []]);
+    expect(requests.map((r) => r.autocommit)).toEqual([true, true, true]);
+  });
+
+  it("rejects autocommit in a call's options, before contacting the server", async () => {
+    const { moca, requests } = client(() => ORDERS);
+    for (const value of [false, true, undefined]) {
+      const opts = { autocommit: value } as unknown as object;
+      const error = (await moca.exec('x', opts).catch((e: unknown) => e)) as MocaArgumentError;
+      expect(error).toBeInstanceOf(MocaArgumentError);
+      expect(error.message).toBe(AUTOCOMMIT_REMOVED);
+      await expect(moca.call(['list orders', []], {}, opts)).rejects.toThrow(AUTOCOMMIT_REMOVED);
+    }
+    expect(requests).toHaveLength(0);
+  });
+
+  it('rejects autocommit in config.defaults', () => {
+    const defaults = { autocommit: false } as unknown as MocaConfig['defaults'];
+    expect(() => new MocaClient({ ...baseConfig, defaults })).toThrow(MocaArgumentError);
+    expect(() => new MocaClient({ ...baseConfig, defaults })).toThrow(AUTOCOMMIT_REMOVED);
+  });
+
+  it('ignores an inherited (non-own) autocommit property', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    await moca.exec('x', Object.create({ autocommit: false }) as object);
+    expect(requests[1]!.autocommit).toBe(true);
+  });
+});
+
+describe('MocaClient dryRun', () => {
+  it('wraps exec text in try/finally rollback and sends it with autocommit=false', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    const rows = await moca.exec('create widget where id = 1', { dryRun: true });
+    expect(rows).toEqual([{ ordnum: 'A1', ordqty: 5, cancel_flg: false }]);
+    expect(requests[1]).toMatchObject({
+      query: 'try { create widget where id = 1 } finally { try { [rollback] } catch (@?) { noop } }',
+      autocommit: false,
+    });
+  });
+
+  it('wraps the rendered command for call, and passes the full result through', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    const full = await moca.call(['list orders', [['wh_id', 'S', 1]]], { wh_id: 'W' }, { dryRun: true, format: 'full' });
+    expect(full).toMatchObject({ status: 0, rows: [{ ordnum: 'A1' }] });
+    expect(requests[1]!.query).toBe(DRY_RUN(`list orders where wh_id = 'W'`));
+    expect(requests[1]!.autocommit).toBe(false);
+  });
+
+  it('dryRun: false behaves like no dryRun', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    await moca.exec('x', { dryRun: false });
+    expect(requests[1]).toMatchObject({ query: 'x', autocommit: true });
+  });
+
+  it('reports the wrapped (and redacted) text as error.command', async () => {
+    const { moca } = client(() => mocaXml(99, {}, 'boom'));
+    const error = (await moca.exec("change pw where usr_pswd = 'secret'", { dryRun: true }).catch((e: unknown) => e)) as MocaCommandError;
+    expect(error).toBeInstanceOf(MocaCommandError);
+    expect(error.command).toBe(DRY_RUN("change pw where usr_pswd = '***'"));
+  });
+
+  it('never wraps the login', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    await moca.exec('x', { dryRun: true });
+    expect(requests[0]!.query.startsWith('login user')).toBe(true);
+    expect(requests[0]!.autocommit).toBe(true);
+  });
+});
+
+describe('MocaClient.batch', () => {
+  class Sub extends MocaClient {}
+  defineCommands(Sub.prototype, {
+    listOrders: ['list orders', [['wh_id', 'S', 1], ['ordqty', 'I', 0]]],
+    createWidget: ['create widget', [['widget_id', 'S', 0]]],
+  });
+  type Builder = Record<string, (args?: object) => unknown> & { raw(text: string): unknown };
+  type Batch = (build: (b: Builder) => readonly unknown[], opts?: object) => Promise<unknown>;
+
+  function batchClient(handler: (r: FakeRequest) => string = () => ORDERS) {
+    const fake = fakeMoca((r) => (r.query.startsWith('login user') ? loginOk() : handler(r)));
+    const moca = new Sub({ ...baseConfig }, { transport: fake.transport });
+    const batch = (moca.batch as unknown as Batch).bind(moca);
+    return { moca, batch, requests: fake.requests };
+  }
+
+  it('joins the steps in braces and sends them once with autocommit=true', async () => {
+    const { batch, requests } = batchClient();
+    await batch((b) => [
+      b.createWidget!({ widget_id: 'W1' }),
+      b.raw('[select 1 a] | publish data where x = @a'),
+      b.listOrders!({ wh_id: 'W' }),
+    ]);
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toMatchObject({
+      query: "{ create widget where widget_id = 'W1' } ;\n{ [select 1 a] | publish data where x = @a } ;\n{ list orders where wh_id = 'W' }",
+      autocommit: true,
+    });
+  });
+
+  it("returns the last step's rows (what MOCA returns), or the full result", async () => {
+    const { batch } = batchClient();
+    await expect(batch((b) => [b.raw('a'), b.raw('b')])).resolves.toEqual([{ ordnum: 'A1', ordqty: 5, cancel_flg: false }]);
+    await expect(batch((b) => [b.raw('a')], { format: 'full', convert: false })).resolves.toMatchObject({
+      status: 0,
+      rows: [{ ordnum: 'A1', ordqty: '5' }],
+    });
+  });
+
+  it('accepts an optional-args command with no arguments', async () => {
+    const { batch, requests } = batchClient();
+    await batch((b) => [b.createWidget!()]);
+    expect(requests[1]!.query).toBe('{ create widget }');
+  });
+
+  it('wraps the whole batch for dryRun and sends it with autocommit=false', async () => {
+    const { batch, requests } = batchClient();
+    await batch((b) => [b.raw('a'), b.raw('b')], { dryRun: true });
+    expect(requests[1]).toMatchObject({ query: DRY_RUN('{ a } ;\n{ b }'), autocommit: false });
+  });
+
+  it('exposes only generated commands and raw on the builder', async () => {
+    const { batch } = batchClient();
+    await batch((b) => {
+      expect(b.exec).toBeUndefined();
+      expect(b.login).toBeUndefined();
+      expect(b.call).toBeUndefined();
+      expect(b.batch).toBeUndefined();
+      expect(b.session).toBeUndefined();
+      expect(b.nope).toBeUndefined();
+      expect(typeof b.listOrders).toBe('function');
+      return [b.raw('x')];
+    });
+  });
+
+  it('validates each step while it is built, and sends nothing when one fails', async () => {
+    const { batch, requests } = batchClient();
+    const error = (await batch((b) => [b.raw('a'), b.listOrders!({})]).catch((e: unknown) => e)) as MocaArgumentError;
+    expect(error).toBeInstanceOf(MocaArgumentError);
+    expect(error.message).toBe('Missing required argument "wh_id" for "list orders"');
+    expect(error.command).toBe('list orders');
+    await expect(batch((b) => [b.listOrders!({ wh_id: 'W', bogus: 1 })])).rejects.toBeInstanceOf(MocaArgumentError);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('rejects an empty step list', async () => {
+    const { batch, requests } = batchClient();
+    await expect(batch(() => [])).rejects.toBeInstanceOf(MocaArgumentError);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('rejects anything that is not a BatchStep, including a look-alike object', async () => {
+    const { batch, requests } = batchClient();
+    for (const bad of [{ moca: 'x' }, 'x', null, undefined, Object.freeze({ moca: 'x' })]) {
+      const error = await batch((b) => [b.raw('a'), bad]).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MocaArgumentError);
+    }
+    await expect(batch(() => 'x' as unknown as unknown[])).rejects.toBeInstanceOf(MocaArgumentError);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('rejects a non-string raw step', async () => {
+    const { batch } = batchClient();
+    await expect(batch((b) => [b.raw(42 as unknown as string)])).rejects.toBeInstanceOf(MocaArgumentError);
+  });
+
+  it('rejects autocommit and extraArgs in the batch options', async () => {
+    const { batch, requests } = batchClient();
+    await expect(batch((b) => [b.raw('a')], { autocommit: true })).rejects.toThrow(AUTOCOMMIT_REMOVED);
+    await expect(batch((b) => [b.raw('a')], { extraArgs: { a: 1 } })).rejects.toBeInstanceOf(MocaArgumentError);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('throws a MocaCommandError whose command is the full, redacted batch text', async () => {
+    const { batch } = batchClient(() => mocaXml(99, {}, 'boom'));
+    const error = (await batch((b) => [b.raw("set pw where usr_pswd = 'secret'"), b.raw('b')]).catch(
+      (e: unknown) => e,
+    )) as MocaCommandError;
+    expect(error).toBeInstanceOf(MocaCommandError);
+    expect(error.status).toBe(99);
+    expect(error.command).toBe("{ set pw where usr_pswd = '***' } ;\n{ b }");
+  });
+
+  it('works on a plain MocaClient with raw steps only', async () => {
+    const { moca, requests } = client(() => ORDERS);
+    await moca.batch((b) => [b.raw('a'), b.raw('b')]);
+    expect(requests[1]!.query).toBe('{ a } ;\n{ b }');
   });
 });

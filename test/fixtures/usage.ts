@@ -1,5 +1,5 @@
 import { createMoca, type ListOrdersArgs } from '../.tmp/moca.generated.js';
-import type { MocaRow } from '../../src/index.js';
+import type { BatchBuilder, BatchOptions, BatchStep, MocaRow } from '../../src/index.js';
 
 declare module '../../src/index.js' {
   interface MocaOutputs {
@@ -73,6 +73,58 @@ export async function check(): Promise<void> {
   // @ts-expect-error required by MOCA for Java commands
   await moca.validateGadget({});
 
+  // autocommit was removed in 0.2.0; dryRun replaces autocommit: false.
+  // @ts-expect-error autocommit was removed
+  await moca.exec('x', { autocommit: false });
+  // @ts-expect-error autocommit was removed
+  await moca.listOrders({ wh_id: 'W' }, { autocommit: false });
+  // @ts-expect-error autocommit was removed from the client defaults too
+  createMoca({ url: 'u', username: 'u', password: 'p', defaults: { autocommit: false } });
+  // @ts-expect-error dryRun is per call only
+  createMoca({ url: 'u', username: 'u', password: 'p', defaults: { dryRun: true } });
+  const dry: Array<{ ordnum: string; ordqty: number }> = await moca.listOrders({ wh_id: 'W' }, { dryRun: true });
+  const dryExec: MocaRow[] = await moca.exec('x', { dryRun: true });
+
+  // batch(): the builder mirrors the generated commands, returning BatchSteps.
+  let step: BatchStep | undefined;
+  const batched = await moca.batch((b) => [
+    b.listOrders({ wh_id: 'W', ordqty: 5 }),
+    b.createInventory(),
+    b.createInventory({ prtnum: 'P' }),
+    b.listActiveCommands(),
+    (step = b.raw('[select 1 a from dual]')),
+  ]);
+  const batchedRow: MocaRow | undefined = batched[0];
+  const typedBatch: Array<{ n: number }> = await moca.batch<{ n: number }>((b) => [b.raw('x')]);
+  const fullBatch = await moca.batch((b) => [b.raw('x')], { format: 'full' });
+  const fullBatchStatus: number = fullBatch.status;
+  const fullBatchRows: MocaRow[] = fullBatch.rows;
+  const batchOpts: BatchOptions = { dryRun: true };
+  const eitherBatch = await moca.batch((b) => [b.raw('x')], batchOpts);
+  const eitherBatchUnknown: unknown = eitherBatch;
+  await moca.batch((b) => [b.raw('x')], { dryRun: true, convert: false, noRowsIsError: true, env: { WH_ID: 'W' } });
+  // @ts-expect-error wh_id is required
+  await moca.batch((b) => [b.listOrders({})]);
+  // @ts-expect-error a required-args command needs its arguments
+  await moca.batch((b) => [b.listOrders()]);
+  // @ts-expect-error typo in an argument name
+  await moca.batch((b) => [b.listOrders({ wh_id: 'W', ordnumm: 'A' })]);
+  // @ts-expect-error exec is not a batch step
+  await moca.batch((b) => [b.exec('x')]);
+  // @ts-expect-error login is not a batch step
+  await moca.batch((b) => [b.login()]);
+  // @ts-expect-error session is not a command
+  void ((b: BatchBuilder<typeof moca>) => b.session);
+  // @ts-expect-error raw takes MOCA text
+  await moca.batch((b) => [b.raw(1)]);
+  // @ts-expect-error steps must come from the builder
+  await moca.batch(() => [{ moca: 'x' }]);
+  // @ts-expect-error autocommit was removed
+  await moca.batch((b) => [b.raw('x')], { autocommit: false });
+  // @ts-expect-error extraArgs is not a batch option
+  await moca.batch((b) => [b.raw('x')], { extraArgs: { a: 1 } });
+
   const args: ListOrdersArgs = { wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null };
-  void [qty, status, fullRows, x, eitherUnknown, firstRow, bad, args];
+  void [qty, status, fullRows, x, eitherUnknown, firstRow, bad, args, dry, dryExec, step];
+  void [batchedRow, typedBatch, fullBatchStatus, fullBatchRows, eitherBatchUnknown];
 }

@@ -73,6 +73,11 @@ describe('RESERVED_MEMBERS', () => {
       expect(RESERVED_MEMBERS.has(name)).toBe(true);
     }
   });
+
+  it('renames commands called batch (a client method) and raw (the batch builder member)', () => {
+    expect(toMethodBase('batch')).toBe('cmdBatch');
+    expect(toMethodBase('raw')).toBe('cmdRaw');
+  });
 });
 
 describe('helpers', () => {

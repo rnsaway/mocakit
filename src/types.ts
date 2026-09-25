@@ -32,8 +32,12 @@ export interface CallOptions {
   convert?: boolean;
   /** Throw on status 510 instead of returning no rows. Default `false`. */
   noRowsIsError?: boolean;
-  /** `moca-request autocommit` attribute. Default `true`. */
-  autocommit?: boolean;
+  /**
+   * Run the command, then roll back everything it wrote, still returning its rows. The MOCA
+   * text is wrapped in `try { ... } finally { try { [rollback] } catch (@?) { noop } }` and sent
+   * with `autocommit="false"`. A command that commits internally cannot be undone. Default `false`.
+   */
+  dryRun?: boolean;
   /** Extra or overriding environment variables for this call. */
   env?: Record<string, string>;
   /** Arguments the command spec does not declare, appended to the where clause. */
@@ -44,7 +48,14 @@ export interface CallOptions {
 export type RowsOptions = CallOptions & { format?: 'rows' };
 export type FullOptions = CallOptions & { format: 'full' };
 
-export type ClientDefaults = Pick<CallOptions, 'convert' | 'noRowsIsError' | 'autocommit'>;
+/** Options for `moca.batch()`: every `CallOptions` field except `extraArgs`. */
+export type BatchOptions = Omit<CallOptions, 'extraArgs'>;
+
+/**
+ * Client-wide call defaults. There is deliberately no `autocommit` (removed in 0.2.0: every
+ * request commits at its end, or rolls back on error) and no `dryRun` (per call only).
+ */
+export type ClientDefaults = Pick<CallOptions, 'convert' | 'noRowsIsError'>;
 
 /** `[argument name, MOCA dtype, required (1) or optional (0)]` */
 export type ArgSpec = readonly [name: string, dtype: string, required: 0 | 1];
