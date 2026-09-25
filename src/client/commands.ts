@@ -83,7 +83,9 @@ export function isBatchStep(value: unknown): value is BatchStep {
   return typeof value === 'object' && value !== null && batchSteps.has(value);
 }
 
-function rawStep(mocaText: string): BatchStep {
+function rawStep(...params: unknown[]): BatchStep {
+  const [mocaText] = params;
+  if (params.length > 1) throw new MocaArgumentError('b.raw() takes only MOCA text; pass options to batch() itself', 'raw');
   if (typeof mocaText !== 'string' || mocaText.trim() === '') {
     throw new MocaArgumentError('b.raw() needs non-empty MOCA text', 'raw');
   }
@@ -91,18 +93,41 @@ function rawStep(mocaText: string): BatchStep {
 }
 
 /**
+ * The spec of the command installed by `defineCommands` under `name`, found by walking `client`'s
+ * prototype chain (own properties first). An override of the command (a subclass method or an
+ * instance field without the spec) is skipped over: a batch step is only MOCA text, so an
+ * override's JavaScript could never run inside a batch anyway. Accessors are never invoked.
+ */
+function findCommandSpec(client: object, name: string | symbol): CommandSpec | undefined {
+  for (let obj: object | null = client; obj !== null; obj = Object.getPrototypeOf(obj) as object | null) {
+    const descriptor = Object.getOwnPropertyDescriptor(obj, name);
+    if (descriptor === undefined) continue;
+    const spec = 'value' in descriptor ? commandSpecOf(descriptor.value) : undefined;
+    if (spec !== undefined) return spec;
+  }
+  return undefined;
+}
+
+/**
  * A builder whose `raw` makes a raw step and whose every other property looks up the same name on
- * `client`: a method installed by `defineCommands` becomes a step factory that renders (and so
- * validates) its arguments immediately; anything else is `undefined`.
+ * `client`'s prototype chain: a method installed by `defineCommands` becomes a step factory that
+ * renders (and so validates) its arguments immediately; anything else is `undefined`.
  */
 export function batchBuilder<C extends MocaClient>(client: C): BatchBuilder<C> {
   const target = Object.create(null) as object;
   return new Proxy(target, {
     get(_target, name) {
       if (name === 'raw') return rawStep;
-      const spec = commandSpecOf(Reflect.get(client, name));
+      const spec = findCommandSpec(client, name);
       if (spec === undefined) return undefined;
-      return (args?: object): BatchStep => {
+      return (...params: unknown[]): BatchStep => {
+        const args = params[0] as object | undefined;
+        if (params.length > 1) {
+          throw new MocaArgumentError(
+            `Batch step "${spec[0]}" takes only its arguments; pass options (format, dryRun, …) to batch() itself`,
+            'opts',
+          );
+        }
         try {
           return batchStep(renderCommand(spec, args, undefined, defaultDateCodec));
         } catch (error) {

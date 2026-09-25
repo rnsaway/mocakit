@@ -310,7 +310,7 @@ Every call (`exec`, `call`, and every generated method) accepts:
 | `extraArgs` | — | Undeclared arguments, appended to the `where` clause (not supported by `exec`) |
 | `signal` | — | Aborts the HTTP request |
 
-`moca.batch()` takes the same options except `extraArgs`. There is no `autocommit` option any more (see
+`moca.batch()` takes the same options except `extraArgs` and `noRowsIsError`. `dryRun` can't be a client default. There is no `autocommit` option any more (see
 [Upgrading from 0.1.0](#upgrading-from-010)).
 
 ## Typing outputs
@@ -354,7 +354,11 @@ named the columns (duplicates suffixed `_2`, `_3`, ...). With `convert: true` (t
 Pass `{ format: 'full' }` to get `{ status, message, columns, rows }` instead of just the row array.
 
 Status `510` (no rows) returns `[]` by default; pass `{ noRowsIsError: true }` to have it throw
-`MocaCommandError` instead.
+`MocaCommandError` instead. (`moca.batch()` always throws for it; see [Transactions](#transactions-batch--dryrun).)
+
+> **Caveat:** MOCA treats 510 as a failed request and **rolls it back**. A write command, or `exec` text, whose
+> final statement finds no rows is rolled back by MOCA even though `exec` returns `[]` for it. If you write and then
+> query, make sure the query finds rows, or check that the write really happened.
 
 ## Errors
 
@@ -362,11 +366,11 @@ Everything throws a subclass of `MocaError` (`message`, `status`, `command`, `ar
 
 | Error | When | Extra fields |
 |---|---|---|
-| `MocaCommandError` | Server status ≠ 0 (and ≠ 510 unless `noRowsIsError`), including a failed `logout user` | `serverMessage`, `result` |
+| `MocaCommandError` | Server status ≠ 0 (and ≠ 510 unless `noRowsIsError`), including a failed `logout user`; always for 510 in a `batch` (MOCA rolled it back) | `serverMessage`, `result` |
 | `MocaAuthError` | Login failed, returned no `session_key`, or a second 523 right after re-login | — |
 | `MocaTransportError` | Invalid service URL, credentials embedded in the URL, network, TLS, timeout, abort, redirect, non-2xx HTTP, or empty body | `cause`, `httpStatus?` |
 | `MocaProtocolError` | Response body isn't parseable as `moca-response` | `rawSnippet` |
-| `MocaArgumentError` | Missing required argument, unknown/mis-cased argument, invalid argument name, unrenderable number/`Date`/value, `USR_ID`/`SESSION_KEY` in `opts.env`, a character XML 1.0 forbids in the query or environment, `extraArgs` on `exec` or `batch`, an `autocommit` option (removed in 0.2.0), an empty batch or a batch step not built by the batch builder, or an invalid client config (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `session.store` with `reuse: false`) | `argument` |
+| `MocaArgumentError` | Missing required argument, unknown/mis-cased argument, invalid argument name, unrenderable number/`Date`/value, `USR_ID`/`SESSION_KEY` in `opts.env`, a character XML 1.0 forbids in the query or environment, `extraArgs` on `exec` or `batch`, an `autocommit` option (removed in 0.2.0), a non-boolean `dryRun` or `[commit]` in dryRun text, an empty batch, a batch step not built by the batch builder, an `async` batch builder, options passed to a step instead of `batch()`, `noRowsIsError` on a batch, or an invalid client config (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `session.store` with `reuse: false`, `dryRun` in `defaults`) | `argument` |
 
 ```ts
 import { isMocaStatus } from 'mocakit';
@@ -410,8 +414,10 @@ mocakit gives you instead works inside a single request:
   ```
 
   Under the hood the MOCA text is wrapped in
-  `try { ... } finally { try { [rollback] } catch (@?) { noop } }` and sent with `autocommit="false"`, and
-  `error.command` shows that wrapped text.
+  `try { ... } finally { try { [rollback] } catch (@?) { noop } }`, and `error.command` shows that wrapped text.
+  Like every mocakit request it is sent with `autocommit="true"`, so even if the wrapper itself fails, MOCA rolls
+  the request back rather than leaving a transaction open. `dryRun` is per call only: it can't be a client
+  default.
 - **`moca.batch()`** sends several commands as **one** request, so they commit together or roll back together. The
   builder `b` offers every generated command with the same typed arguments (autocomplete included), plus `b.raw()`
   for raw MOCA text:
@@ -429,8 +435,14 @@ mocakit gives you instead works inside a single request:
   ```
 
   Every step's arguments are validated as it is built, so a bad argument throws `MocaArgumentError` before anything
-  is sent. If any step fails on the server, the whole batch is rolled back and you get a `MocaCommandError` whose
-  `command` is the full batch text.
+  is sent. A step takes only its arguments; options such as `format` or `dryRun` go on `batch()` itself. The build
+  callback must return the steps synchronously (not `async`). If any step fails on the server, the whole batch is
+  rolled back and you get a `MocaCommandError` whose `command` is the full batch text.
+
+  **A step that finds no rows fails the batch.** MOCA answers status 510 and rolls back the whole request, so
+  `batch()` throws a `MocaCommandError` (status 510, "A batch step returned no rows (status 510), so MOCA rolled back
+  the whole batch") instead of returning `[]`. That's why `noRowsIsError` isn't a batch option. If a step may
+  legitimately find nothing, run it outside the batch.
 
 **Limits — read these before relying on a rollback:**
 
@@ -442,6 +454,12 @@ mocakit gives you instead works inside a single request:
   pipe).
 - **A batch returns only the last step's rows**, because that is what MOCA returns for `A ; B`. Put the query whose
   rows you want last.
+- **Don't put `[commit]` in dryRun or batch text.** It makes everything before it permanent, so the rollback (or a
+  later failing step) can't undo it. mocakit rejects `[commit]` in `exec` and `batch` text when `dryRun` is set, but
+  it can't see commits made inside commands.
+- **`exec` and `b.raw()` text must be balanced MOCA** (matching braces and brackets). The text is placed inside
+  `try { ... }` for dryRun and inside `{ ... }` for a batch step, so an unbalanced brace would change what gets
+  rolled back or grouped.
 
 ### Upgrading from 0.1.0
 
@@ -502,9 +520,10 @@ login, to stop waiting on it without cancelling that login for other callers).
   }
   ```
 
-- `moca.batch()`'s builder finds commands through the methods `defineCommands` installed. A command you
-  override (as above) is no longer available as `b.<name>` at runtime (it is `undefined`), even though its type is
-  still there; use `b.raw()` for it, or don't override commands you batch.
+- `moca.batch()`'s builder finds commands through the methods `defineCommands` installed, looking up the
+  prototype chain, so an overridden command (as above) is still available as `b.<name>`, with its original
+  arguments. **Your override's JavaScript never runs inside a batch**: a batch step is only the command's MOCA
+  text.
 
 - Don't detach a command from its client (`const f = moca.listOrders; f(...)`) — it relies on `this`, which is
   lost once it's called unbound. Call it as `moca.listOrders(...)`, or bind it explicitly if you need a reference.

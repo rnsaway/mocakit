@@ -102,7 +102,7 @@ export async function check(): Promise<void> {
   const batchOpts: BatchOptions = { dryRun: true };
   const eitherBatch = await moca.batch((b) => [b.raw('x')], batchOpts);
   const eitherBatchUnknown: unknown = eitherBatch;
-  await moca.batch((b) => [b.raw('x')], { dryRun: true, convert: false, noRowsIsError: true, env: { WH_ID: 'W' } });
+  await moca.batch((b) => [b.raw('x')], { dryRun: true, convert: false, env: { WH_ID: 'W' } });
   // @ts-expect-error wh_id is required
   await moca.batch((b) => [b.listOrders({})]);
   // @ts-expect-error a required-args command needs its arguments
@@ -123,6 +123,12 @@ export async function check(): Promise<void> {
   await moca.batch((b) => [b.raw('x')], { autocommit: false });
   // @ts-expect-error extraArgs is not a batch option
   await moca.batch((b) => [b.raw('x')], { extraArgs: { a: 1 } });
+  // @ts-expect-error noRowsIsError is not settable on a batch (510 always rolls the batch back)
+  await moca.batch((b) => [b.raw('x')], { noRowsIsError: false });
+  // @ts-expect-error options go on batch(), not on a step
+  await moca.batch((b) => [b.listOrders({ wh_id: 'W' }, { format: 'full' })]);
+  // @ts-expect-error the builder must return steps synchronously
+  await moca.batch(async (b) => [b.raw('x')]);
 
   const args: ListOrdersArgs = { wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null };
   void [qty, status, fullRows, x, eitherUnknown, firstRow, bad, args, dry, dryExec, step];

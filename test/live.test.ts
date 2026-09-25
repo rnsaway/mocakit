@@ -214,6 +214,53 @@ live('live MOCA server', () => {
       }
     }, 120_000);
 
+    it('a read-only dryRun returns its rows without error (the catch (@?) / 511 path)', async () => {
+      const rows = await client.exec('[select 1 a]', { dryRun: true });
+      console.log('read-only dryRun: rows', rows.length, '| a', firstValue(rows));
+      expect(rows.length).toBe(1);
+      expect(firstValue(rows)).toBe(1);
+    }, 120_000);
+
+    it('a batch whose last step finds no rows throws 510, and MOCA rolled every step back', async () => {
+      const name = table('norows_last');
+      try {
+        const error = await client
+          .batch((b) => [
+            b.raw(`[create table ${name} (x int)]`),
+            b.raw(`[insert into ${name} values (1)]`),
+            b.raw(`[select x from ${name} where x = 2]`),
+          ])
+          .catch((e: unknown) => e);
+        const present = await exists(name);
+        console.log('batch 510 last: status', error instanceof MocaCommandError ? error.status : 'no MocaCommandError', '| table present afterwards', present);
+        expect(error instanceof MocaCommandError).toBe(true);
+        expect((error as MocaCommandError).status).toBe(510);
+        expect(present).toBe(false);
+      } finally {
+        await dropIfExists(name);
+      }
+    }, 120_000);
+
+    it('a batch whose middle step finds no rows throws 510, and nothing survives', async () => {
+      const name = table('norows_mid');
+      try {
+        const error = await client
+          .batch((b) => [
+            b.raw(`[create table ${name} (x int)]`),
+            b.raw(`[select x from ${name} where x = 2]`),
+            b.raw(`[insert into ${name} values (1)]`),
+          ])
+          .catch((e: unknown) => e);
+        const present = await exists(name);
+        console.log('batch 510 middle: status', error instanceof MocaCommandError ? error.status : 'no MocaCommandError', '| table present afterwards', present);
+        expect(error instanceof MocaCommandError).toBe(true);
+        expect((error as MocaCommandError).status).toBe(510);
+        expect(present).toBe(false);
+      } finally {
+        await dropIfExists(name);
+      }
+    }, 120_000);
+
     it('a dryRun batch returns the last step and rolls every step back', async () => {
       const name = table('drybatch');
       try {

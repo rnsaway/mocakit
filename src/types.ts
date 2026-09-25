@@ -34,8 +34,9 @@ export interface CallOptions {
   noRowsIsError?: boolean;
   /**
    * Run the command, then roll back everything it wrote, still returning its rows. The MOCA
-   * text is wrapped in `try { ... } finally { try { [rollback] } catch (@?) { noop } }` and sent
-   * with `autocommit="false"`. A command that commits internally cannot be undone. Default `false`.
+   * text is wrapped in `try { ... } finally { try { [rollback] } catch (@?) { noop } }` (sent with
+   * `autocommit="true"` like every request, so if the wrapper itself fails MOCA rolls back). A
+   * command that commits internally cannot be undone. Per call only. Default `false`.
    */
   dryRun?: boolean;
   /** Extra or overriding environment variables for this call. */
@@ -48,8 +49,12 @@ export interface CallOptions {
 export type RowsOptions = CallOptions & { format?: 'rows' };
 export type FullOptions = CallOptions & { format: 'full' };
 
-/** Options for `moca.batch()`: every `CallOptions` field except `extraArgs`. */
-export type BatchOptions = Omit<CallOptions, 'extraArgs'>;
+/**
+ * Options for `moca.batch()`: every `CallOptions` field except `extraArgs` and `noRowsIsError`. A
+ * batch always treats status 510 as an error, because MOCA rolls the whole request back when any
+ * step finds no rows.
+ */
+export type BatchOptions = Omit<CallOptions, 'extraArgs' | 'noRowsIsError'>;
 
 /**
  * Client-wide call defaults. There is deliberately no `autocommit` (removed in 0.2.0: every

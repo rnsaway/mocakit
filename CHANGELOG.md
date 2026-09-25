@@ -21,12 +21,21 @@ All notable changes to mocakit are documented here. The format follows
 
 - **`dryRun`** call option (`exec`, `call`, generated methods, `batch`): runs the command, returns its rows, then
   rolls back what it wrote. The text is wrapped in
-  `try { ... } finally { try { [rollback] } catch (@?) { noop } }` and sent with `autocommit="false"`.
+  `try { ... } finally { try { [rollback] } catch (@?) { noop } }` and sent with `autocommit="true"` like every
+  request (mocakit never sends `autocommit="false"`), so a failing wrapper is rolled back by MOCA. Per call only:
+  `defaults.dryRun` and non-boolean values throw `MocaArgumentError`, and so does an explicit `[commit]` in dryRun
+  text for `exec` and `batch`.
 - **`moca.batch((b) => [...steps], opts?)`**: several commands in one request, committed or rolled back together.
   The builder `b` offers every generated command with the same argument types, plus `b.raw(mocaText)`. Arguments
   are validated as each step is built. Resolves to the last step's rows (or the full result with
-  `format: 'full'`).
+  `format: 'full'`). A step that finds no rows (510) makes MOCA roll back the whole request, so `batch` always throws
+  `MocaCommandError` for it, and `noRowsIsError` is not a batch option. Step factories reject a second (options)
+  argument, an `async` build callback is rejected, and overridden commands resolve to their original spec (the
+  override's JavaScript never runs in a batch).
 - Exported types `BatchBuilder`, `BatchStep` and `BatchOptions`.
+- `null` options are treated like omitted ones in `exec`, `call` and `batch`.
+- `CHANGELOG.md` ships in the npm package.
+- README: MOCA rolls back a request whose final statement finds no rows (510), even though `exec` returns `[]`.
 
 ### Fixed
 

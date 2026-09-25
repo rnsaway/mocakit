@@ -56,8 +56,8 @@
 </moca-request>
 ```
 
-Every request is sent with `autocommit="true"`, except a `dryRun` request (§7a), which uses `"false"`. The
-attribute is not configurable. Environment vars with `undefined`, `null` or `''` values are omitted. The query text is XML-escaped (`& < >`) and
+Every request (login, logout, `dryRun` and `batch` included) is sent with `autocommit="true"`. The attribute is
+not configurable, and mocakit never sends `autocommit="false"` (§7a, §14 item 8). Environment vars with `undefined`, `null` or `''` values are omitted. The query text is XML-escaped (`& < >`) and
 attribute values are also escaped for `"`.
 
 **Login:** `login user where usr_id = '<user>' and usr_pswd = '<password>'`, sent with `autocommit="true"` and
@@ -176,7 +176,7 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
 | `format` | `'rows' \| 'full'` | `'rows'` | Return type follows via overloads |
 | `convert` | `boolean` | `true` | Type-convert values from column metadata |
 | `noRowsIsError` | `boolean` | `false` | Status 510 throws `MocaCommandError` instead of returning `[]` |
-| `dryRun` | `boolean` | `false` | Run, return the rows, then roll back (§7a). Sent with `autocommit="false"` |
+| `dryRun` | `boolean` | `false` | Run, return the rows, then roll back (§7a). Per call only; a non-boolean value throws `MocaArgumentError` |
 | `env` | `Record<string, string>` | — | Extra/override environment vars for this call |
 | `extraArgs` | `Record<string, MocaArgValue>` | — | Undeclared arguments appended to the `where` clause (`call` and generated methods only; `exec` rejects it) |
 | `signal` | `AbortSignal` | — | Aborts the HTTP request |
@@ -184,8 +184,9 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
 `autocommit` was removed in 0.2.0. Because JavaScript callers (or casts) can still pass it, any **own** property named
 `autocommit` in a call's options or in `config.defaults` throws `MocaArgumentError`: *The autocommit option was
 removed in mocakit 0.2.0: autocommit=false leaves the transaction open on a pooled database connection. Use {
-dryRun: true } to roll back, or moca.batch() for several commands in one transaction.* `BatchOptions` is
-`CallOptions` without `extraArgs`.
+dryRun: true } to roll back, or moca.batch() for several commands in one transaction.* A `dryRun` key in
+`config.defaults` also throws. `null` options are treated like omitted ones. `BatchOptions` is `CallOptions`
+without `extraArgs` and `noRowsIsError` (§7a).
 
 ### Methods
 
@@ -205,7 +206,7 @@ dryRun: true } to roll back, or moca.batch() for several commands in one transac
 
 The constructor throws `MocaArgumentError` for a blank (or non-string) `url`/`username`/`password`, a non-finite
 `maxAgeMinutes`, an out-of-range `timeoutMs`, `session.store` combined with `session.reuse: false`, or an
-`autocommit` key in `defaults`.
+`autocommit` or `dryRun` key in `defaults`.
 `createMoca(config, deps?)` / `new MocaClient(config, deps?)` take optional `MocaClientDeps` (`{ transport?, now? }`).
 
 ## 6. Argument rendering
@@ -289,10 +290,14 @@ works within one request:
   try { <text> } finally { try { [rollback] } catch (@?) { noop } }
   ```
 
-  and sends it with `autocommit="false"`. The command's rows (or full result) are returned unchanged, and its writes
-  are rolled back. `[rollback]` raises SQL Server error 511 when no transaction was started (the command touched no
-  table), and MOCA reports every SQL Server error as 511, so the guard must be the catch-all `catch (@?)`. The
-  wrapper leaves nothing open (§14 item 10). `error.command` is the wrapped text (still redacted).
+  and sends it with `autocommit="true"`, like every request. The command's rows (or full result) are returned
+  unchanged, and its writes are rolled back. `[rollback]` raises SQL Server error 511 when no transaction was
+  started (the command touched no table), and MOCA reports every SQL Server error as 511, so the guard must be the
+  catch-all `catch (@?)`. The wrapper leaves nothing open (§14 item 10). Because the request is autocommit, a
+  failure of the wrapper itself makes MOCA roll the request back instead of leaving a transaction open.
+  `error.command` is the wrapped text (still redacted). Text matching `/\[\s*commit\b/i` (an explicit
+  `[commit]`) is rejected with `MocaArgumentError` for `exec` and `batch` when `dryRun` is set, since it would
+  make the writes permanent before the rollback.
 - **`moca.batch(build, opts?)`** runs several commands in one request, so they commit or roll back together:
 
   ```ts
@@ -310,23 +315,36 @@ works within one request:
     also how the mapped type recognises commands. It does not change how generated code type-checks, and the
     generated file is unchanged. On a 10,240-command client, a `batch` call added no measurable `tsc` check time
     (medians 5.65 s with vs 5.56 s without, over nine runs each with about ±1.5 s of noise; ~1.0 GB either way).
-  - At runtime `b` is a `Proxy`: `raw` returns the raw-step factory; any other name looks up `client[name]`, and if
-    that is a method installed by `defineCommands` (it carries its spec), returns a factory rendering that spec with
-    `renderCommand`; anything else is `undefined`. Arguments are therefore validated as each step is built, and a
-    `MocaArgumentError` (with `command` = the MOCA command name) means nothing was sent.
+  - At runtime `b` is a `Proxy`: `raw` returns the raw-step factory; any other name walks the client's prototype
+    chain (own properties first, data properties only) for a method installed by `defineCommands` (it carries its
+    spec), and returns a factory rendering that spec with `renderCommand`; anything else is `undefined`. A
+    subclass's override of a command is therefore skipped in favour of the original spec: its JavaScript never runs
+    inside a batch (a step is only MOCA text). Arguments are validated as each step is built, and a
+    `MocaArgumentError` (with `command` = the MOCA command name) means nothing was sent. A step factory takes only
+    the arguments: a second parameter throws `MocaArgumentError` (options go on `batch()`), and so does a second
+    parameter to `raw`.
   - A `BatchStep` is an opaque, frozen `{ moca }` object; the client only accepts steps its builders created
     (tracked in a module-private `WeakSet`), so a look-alike object is rejected. `b.raw('')` (blank text) is rejected.
   - The steps are joined with ` ;` and a newline, each in braces: `{ <step1> } ;` / `{ <step2> } ;` / … / `{ <stepN> }`.
     The braces make a pipe inside a raw step bind within it. The text is sent once with `autocommit="true"`; with
-    `opts.dryRun` the whole joined text is wrapped as above and sent with `autocommit="false"`.
+    `opts.dryRun` the whole joined text is wrapped as above (still `autocommit="true"`).
   - It resolves to the **last** step's rows, which is what MOCA returns for `A ; B` (§14 item 9).
-  - An empty step list, a non-`BatchStep` element, or `extraArgs` in the options throws `MocaArgumentError` before
-    anything is sent. A server error is an ordinary `MocaCommandError` whose `command` is the full (redacted) batch
-    text.
+  - **Status 510 always throws.** When any step finds no rows, MOCA stops, returns 510 and rolls back the whole
+    request (§14 item 12), so reporting `[]` as success would hide that nothing was written. `batch` throws a
+    `MocaCommandError` (status 510) with the message `A batch step returned no rows (status 510), so MOCA rolled back
+    the whole batch[: <server message>]`, for every `format` and with `dryRun`. `noRowsIsError` is therefore not a
+    batch option (the type omits it; an own `noRowsIsError` key throws `MocaArgumentError`), and
+    `defaults.noRowsIsError` does not apply.
+  - An empty step list, a non-`BatchStep` element, a build callback that returns a Promise (`the batch builder must
+    return steps synchronously…`; the Promise's own rejection is swallowed), or `extraArgs`/`noRowsIsError` in the
+    options throws `MocaArgumentError` before anything is sent. A server error is an ordinary `MocaCommandError`
+    whose `command` is the full (redacted) batch text.
 
-**Limits.** A command that commits internally cannot be undone by `dryRun` or by a failing later step of a batch.
+**Limits.** A command that commits internally cannot be undone by `dryRun` or by a failing later step of a batch,
+and neither can an explicit `[commit]` in the text (rejected under `dryRun`, but not detectable inside commands).
 There is no JavaScript between batch steps: a step can't depend on an earlier step's result except through MOCA
-itself (e.g. pipes inside one `raw` step). Only the last step's rows come back.
+itself (e.g. pipes inside one `raw` step). Only the last step's rows come back. `exec` and `raw` text must be
+balanced MOCA: an unbalanced brace or bracket would change what the wrapper or the batch braces enclose.
 
 ## 8. Response format
 
@@ -354,7 +372,9 @@ itself (e.g. pipes inside one `raw` step). Only the last step's rows come back.
   mapping in §11, where `UNKNOWN` and the stack types have their own kinds (`any`, `stack`). For result columns
   those kinds convert like `string`.
 - `convert: false` leaves every value as `string | null` or nested rows.
-- Status 510 returns `[]` unless `noRowsIsError` is set.
+- Status 510 returns `[]` unless `noRowsIsError` is set (`batch` always throws for it, §7a). **Caveat:** MOCA
+  treats 510 as a failure of the request and rolls it back. A single write command (or `exec` text) whose final
+  statement finds no rows is rolled back too, even though `exec` returns `[]` for it (§14 item 12).
 - `parseMocaDate(s: string): Date` is exported as a helper (§8a).
 
 ### `format: 'full'` → `Promise<MocaResult<T>>`
@@ -438,11 +458,11 @@ All command failures throw; there is no non-throwing variant.
 
 | Class (extends `MocaError`) | Raised when | Extra fields |
 |---|---|---|
-| `MocaCommandError` | server status ≠ 0 (and ≠ 510 unless `noRowsIsError`); also a failed `logout user` (other than 523). For a `dryRun` call `command` is the wrapped text; for a `batch` it is the full joined batch text | `status`, `serverMessage`, `result` (partial `MocaResult` if any) |
+| `MocaCommandError` | server status ≠ 0 (and ≠ 510 unless `noRowsIsError`); also a failed `logout user` (other than 523). For a `dryRun` call `command` is the wrapped text; for a `batch` it is the full joined batch text. A `batch` answered with 510 always throws, with the message `A batch step returned no rows (status 510), so MOCA rolled back the whole batch…` | `status`, `serverMessage`, `result` (partial `MocaResult` if any) |
 | `MocaAuthError` | login returned status ≠ 0, login returned no `session_key`, or a second 523 right after re-login | `status` |
 | `MocaTransportError` | invalid service URL, credentials embedded in the URL, network/TLS/timeout/abort, redirect, HTTP non-2xx, empty body | `cause`, `httpStatus?` |
 | `MocaProtocolError` | body is not parseable as a moca-response | `rawSnippet` (first 500 chars) |
-| `MocaArgumentError` | missing/`null` required arg; unknown arg or wrong casing of a declared one; duplicate `extraArgs` key; invalid arg name; unrenderable number, invalid `Date` or unsupported value type; `USR_ID`/`SESSION_KEY` env override; a character not allowed in XML 1.0 in the query or environment; invalid `MocaConfig` (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `store` with `reuse: false`, `autocommit` in `defaults`); `extraArgs` passed to `exec` or `batch`; `autocommit` in a call's or batch's options (removed in 0.2.0); a `batch` with no steps, a step that is not a `BatchStep`, or `b.raw` with blank text; a batch step whose arguments fail validation (raised while the step is built) | `argument` |
+| `MocaArgumentError` | missing/`null` required arg; unknown arg or wrong casing of a declared one; duplicate `extraArgs` key; invalid arg name; unrenderable number, invalid `Date` or unsupported value type; `USR_ID`/`SESSION_KEY` env override; a character not allowed in XML 1.0 in the query or environment; invalid `MocaConfig` (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `store` with `reuse: false`, `autocommit` or `dryRun` in `defaults`); `extraArgs` passed to `exec` or `batch`; `autocommit` in a call's or batch's options (removed in 0.2.0); a non-boolean `dryRun`; an explicit `[commit]` in `exec`/`batch` text with `dryRun`; `noRowsIsError` in batch options; a `batch` with no steps, a step that is not a `BatchStep`, a build callback returning a Promise, or `b.raw` with blank text; a second (options) argument to a step factory or `b.raw`; a batch step whose arguments fail validation (raised while the step is built) | `argument` |
 
 `MocaError` base fields: `message`, `status` (`-1` for non-server errors), `command` (the MOCA text that was, or
 would have been, sent), `args`, and `toJSON()` (so `JSON.stringify(error)` includes those fields).
@@ -702,7 +722,8 @@ case-insensitively. All optional argument types also accept `null`, which remove
   its own global temp table `##mk_<timestamp>_<suffix>` (tempdb only; dropped in `finally`; only statuses, counts and
   booleans are logged): a `dryRun` `exec` that creates, inserts and counts (count 1, table absent afterwards); a
   committed `batch` (table present afterwards); a `batch` whose second step fails (`MocaCommandError`, table absent);
-  and a `dryRun` batch (table absent).
+  a read-only `dryRun` (`[select 1 a]`: one row, no error, i.e. the `catch (@?)` path); batches whose last or middle
+  step finds no rows (`MocaCommandError` 510, table absent); and a `dryRun` batch (table absent).
 
 ## 14. Live-server findings
 
@@ -726,6 +747,7 @@ Confirmed on a live server (a snapshot of 10,354 active commands) with the live 
    not executed. That is what the single post-523 re-login and retry relies on. (A command making nested
    `remote(...)` calls was not exercised separately.)
 6. **510.** A no-rows SQL query returns status 510, which mocakit maps to `[]` (or throws with `noRowsIsError`).
+   MOCA also rolls such a request back (item 12).
 7. **`argreq` is enforced only for compiled commands.** Calling a C Function or Java Method command without an
    argument flagged `argreq` returns status 507, `Command <name> : Arg <arg> is required` (checked by the live
    suite). Local Syntax commands are **not** checked: e.g. `list user roles` flags `usr_id` but succeeds without
@@ -744,12 +766,19 @@ Confirmed on a live server (a snapshot of 10,354 active commands) with the live 
    end, and any error rolls back the whole request (a `##temp` table created in step 1 of a request whose step 2
    failed did not survive).
 9. **`A ; B` returns only B's rows**, and `try { A } finally { B }` returns A's rows and still runs B.
-10. **dryRun.** `try { <cmd> } finally { try { [rollback] } catch (@?) { noop } }` sent with `autocommit="false"`
-    returns `<cmd>`'s rows, undoes its writes (a `##temp` table created inside did not survive) and leaves nothing
-    open. `[rollback]` raises SQL Server error 511 when no transaction was started; MOCA reports every SQL Server
+10. **dryRun.** `try { <cmd> } finally { try { [rollback] } catch (@?) { noop } }` returns `<cmd>`'s rows, undoes its
+    writes (a `##temp` table created inside did not survive) and leaves nothing open. This holds with
+    `autocommit="false"` and, probed later, with `autocommit="true"` too (create + insert + count: count 1 inside,
+    table absent afterwards; the read-only `[select 1 a]` wrapped returns status 0 and one row), so mocakit sends
+    dryRun with `"true"` and never sends `"false"`. `[rollback]` raises SQL Server error 511 when no transaction was started; MOCA reports every SQL Server
     error as status 511, so `catch (511)` is not specific enough and `catch (@?)` is required. The live suite
     re-checks items 8–10 (§13).
 11. **MOCA intercepts `@@name` inside `[...]`**, so SQL Server's `@@` functions can't be used in SQL sent through
     MOCA as written.
+12. **510 rolls the whole request back.** With `autocommit="true"`,
+    `{ [create table ##t (x int)] } ; { [insert into ##t values (1)] } ; { [select x from ##t where x = 2] }` returns
+    status 510 and the table does not exist afterwards (checked from a separate request). With the no-rows select
+    in the middle (`create ; select-no-rows ; insert`) the status is also 510 and the table is absent: MOCA stops at
+    the 510 (a completed insert would have made the last status 0) and rolls back. The live suite checks both.
 
 (`logout user` is confirmed to exist.)

@@ -67,13 +67,40 @@ function assertNoAutocommit(options: object | undefined, where: string): void {
 }
 
 /**
- * Wraps MOCA text so that it runs, returns its rows, and is then rolled back. Must be sent with
- * autocommit="false". `[rollback]` itself raises SQL Server error 511 when no transaction was
- * started (the command touched no table); MOCA reports every SQL Server error as 511, so only
- * the catch-all `catch (@?)` can swallow it.
+ * Wraps MOCA text so that it runs, returns its rows, and is then rolled back. Sent with
+ * autocommit="true" like every other request (verified live, spec §14 item 10): if the wrapper
+ * itself fails, MOCA rolls the request back rather than leaving a transaction open.
+ * `[rollback]` raises SQL Server error 511 when no transaction was started (the command touched
+ * no table); MOCA reports every SQL Server error as 511, so only the catch-all `catch (@?)` can
+ * swallow it.
  */
 function wrapDryRun(moca: string): string {
   return `try { ${moca} } finally { try { [rollback] } catch (@?) { noop } }`;
+}
+
+/** An explicit `[commit]` inside dryRun text would make its writes permanent before the rollback. */
+const COMMIT_STATEMENT = /\[\s*commit\b/i;
+
+function assertNoCommitInDryRun(moca: string): void {
+  if (COMMIT_STATEMENT.test(moca)) {
+    throw new MocaArgumentError('[commit] would defeat dryRun: remove it from the MOCA text', 'dryRun');
+  }
+}
+
+/** JavaScript callers can pass anything; only `true`/`false` (or leaving it out) mean something. */
+function assertDryRunOption(opts: CallOptions): void {
+  if (opts.dryRun !== undefined && typeof opts.dryRun !== 'boolean') {
+    throw new MocaArgumentError('dryRun must be a boolean', 'dryRun');
+  }
+}
+
+/** A thenable from `build` means an async callback; its steps would arrive too late. */
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === 'object' || typeof value === 'function') &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  );
 }
 
 const PROTECTED_ENV_KEYS = new Set(['usr_id', 'session_key']);
@@ -113,6 +140,12 @@ export class MocaClient {
     }
 
     assertNoAutocommit(config.defaults, 'defaults.autocommit');
+    if (config.defaults != null && Object.hasOwn(config.defaults, 'dryRun')) {
+      throw new MocaArgumentError(
+        'dryRun cannot be a client default: pass { dryRun: true } per call, so a rollback is always explicit',
+        'defaults.dryRun',
+      );
+    }
 
     if (config.session?.store !== undefined && config.session.reuse === false) {
       throw new MocaArgumentError(
@@ -145,7 +178,15 @@ export class MocaClient {
   exec<T = MocaRow>(moca: string, opts?: RowsOptions): Promise<T[]>;
   exec<T = MocaRow>(moca: string, opts: FullOptions): Promise<MocaResult<T>>;
   exec(moca: string, opts?: CallOptions): Promise<unknown[] | MocaResult<unknown>>;
-  async exec(moca: string, opts: CallOptions = {}): Promise<unknown[] | MocaResult<unknown>> {
+  async exec(moca: string, options?: CallOptions | null): Promise<unknown[] | MocaResult<unknown>> {
+    const opts = options ?? {};
+    if (opts.dryRun === true) {
+      try {
+        assertNoCommitInDryRun(moca);
+      } catch (error) {
+        this.#enrich(error, moca, undefined);
+      }
+    }
     if (opts.extraArgs !== undefined && Object.keys(opts.extraArgs).length > 0) {
       this.#enrich(
         new MocaArgumentError(
@@ -163,7 +204,8 @@ export class MocaClient {
   call<T = MocaRow>(spec: CommandSpec, args?: object, opts?: RowsOptions): Promise<T[]>;
   call<T = MocaRow>(spec: CommandSpec, args: object | undefined, opts: FullOptions): Promise<MocaResult<T>>;
   call(spec: CommandSpec, args?: object, opts?: CallOptions): Promise<unknown[] | MocaResult<unknown>>;
-  async call(spec: CommandSpec, args?: object, opts: CallOptions = {}): Promise<unknown[] | MocaResult<unknown>> {
+  async call(spec: CommandSpec, args?: object, options?: CallOptions | null): Promise<unknown[] | MocaResult<unknown>> {
+    const opts = options ?? {};
     const allArgs: Record<string, unknown> = { ...(args ?? {}), ...(opts.extraArgs ?? {}) };
     let command: string;
     try {
@@ -186,17 +228,40 @@ export class MocaClient {
    *
    * Resolves to the last step's rows (that is what MOCA returns for `A ; B`). With
    * `opts.dryRun`, the whole batch is rolled back afterwards.
+   *
+   * Status 510 (no rows) from any step always throws `MocaCommandError`: MOCA has then rolled back
+   * the whole request, so reporting `[]` as success would hide that nothing was written. For the
+   * same reason `noRowsIsError` is not a batch option.
    */
   batch<T = MocaRow>(build: (b: BatchBuilder<this>) => readonly BatchStep[], opts?: BatchOptions & { format?: 'rows' }): Promise<T[]>;
   batch<T = MocaRow>(build: (b: BatchBuilder<this>) => readonly BatchStep[], opts: BatchOptions & { format: 'full' }): Promise<MocaResult<T>>;
   batch(build: (b: BatchBuilder<this>) => readonly BatchStep[], opts?: BatchOptions): Promise<unknown[] | MocaResult<unknown>>;
-  async batch(build: (b: BatchBuilder<this>) => readonly BatchStep[], opts: BatchOptions = {}): Promise<unknown[] | MocaResult<unknown>> {
+  async batch(
+    build: (b: BatchBuilder<this>) => readonly BatchStep[],
+    options?: BatchOptions | null,
+  ): Promise<unknown[] | MocaResult<unknown>> {
+    const opts: CallOptions = options ?? {};
     assertNoAutocommit(opts, 'autocommit');
-    const extraArgs = (opts as CallOptions).extraArgs;
-    if (extraArgs !== undefined) {
+    assertDryRunOption(opts);
+    if (opts.extraArgs !== undefined) {
       throw new MocaArgumentError('extraArgs is not supported by batch(); pass arguments to each step', 'extraArgs');
     }
+    if (Object.hasOwn(opts, 'noRowsIsError')) {
+      throw new MocaArgumentError(
+        'noRowsIsError is not supported by batch(): a step that finds no rows (510) makes MOCA roll back the whole batch, so batch() always throws for it',
+        'noRowsIsError',
+      );
+    }
     const steps: unknown = build(batchBuilder(this));
+    if (isThenable(steps)) {
+      // Swallow the callback's own outcome: its steps arrive too late, and a rejection must not
+      // surface as an unhandled rejection.
+      Promise.resolve(steps).catch(() => undefined);
+      throw new MocaArgumentError(
+        'the batch builder must return steps synchronously (an array, not a Promise); build every step before calling batch()',
+        'steps',
+      );
+    }
     if (!Array.isArray(steps) || steps.length === 0) {
       throw new MocaArgumentError('moca.batch() needs a non-empty array of steps', 'steps');
     }
@@ -210,7 +275,14 @@ export class MocaClient {
     });
     // Each step is braced so that a pipe (or anything else) inside a raw step binds within it.
     const text = (steps as BatchStep[]).map((step) => `{ ${step.moca} }`).join(' ;\n');
-    return this.#execute(text, undefined, opts);
+    if (opts.dryRun === true) {
+      try {
+        assertNoCommitInDryRun(text);
+      } catch (error) {
+        this.#enrich(error, text, undefined);
+      }
+    }
+    return this.#execute(text, undefined, { ...opts, noRowsIsError: true }, true);
   }
 
   /**
@@ -244,7 +316,7 @@ export class MocaClient {
     const session = await this.#sessions.peek();
     if (session === null) return;
     try {
-      const response = await this.#post('logout user', this.#environment(session, undefined), true, undefined);
+      const response = await this.#post('logout user', this.#environment(session, undefined), undefined);
       if (response.status !== MOCA_STATUS.OK && response.status !== MOCA_STATUS.SESSION_EXPIRED) {
         throw new MocaCommandError(response.status, response.message, { command: 'logout user' });
       }
@@ -263,6 +335,7 @@ export class MocaClient {
     command: string,
     args: Record<string, unknown> | undefined,
     opts: CallOptions,
+    isBatch = false,
   ): Promise<unknown[] | MocaResult<unknown>> {
     let options: ResolvedOptions;
     try {
@@ -308,7 +381,7 @@ export class MocaClient {
     }
 
     try {
-      return this.#shape(response, options);
+      return this.#shape(response, options, isBatch);
     } catch (error) {
       this.#enrich(error, command, args);
     }
@@ -332,9 +405,7 @@ export class MocaClient {
     options: ResolvedOptions,
   ): Promise<RawResponse> {
     try {
-      // Every request commits at its end (or rolls back on error), except a dryRun, whose
-      // wrapper rolls back itself and so must run with autocommit="false".
-      return await this.#post(command, this.#environment(session, options.env), !options.dryRun, options.signal);
+      return await this.#post(command, this.#environment(session, options.env), options.signal);
     } catch (error) {
       this.#enrich(error, command, args);
     }
@@ -378,7 +449,7 @@ export class MocaClient {
     });
   }
 
-  #shape(response: RawResponse, options: ResolvedOptions): MocaRow[] | MocaResult<MocaRow> {
+  #shape(response: RawResponse, options: ResolvedOptions, isBatch: boolean): MocaRow[] | MocaResult<MocaRow> {
     const emptyIsFine = response.status === MOCA_STATUS.NO_ROWS && !options.noRowsIsError;
     const rows = emptyIsFine ? [] : toRows(response, options.convert);
     const result: MocaResult<MocaRow> = {
@@ -387,21 +458,26 @@ export class MocaClient {
       columns: response.columns,
       rows,
     };
+    if (isBatch && response.status === MOCA_STATUS.NO_ROWS) {
+      const error = new MocaCommandError(response.status, response.message, { result });
+      error.message = `A batch step returned no rows (status 510), so MOCA rolled back the whole batch${response.message ? `: ${response.message}` : ''}`;
+      throw error;
+    }
     if (response.status !== MOCA_STATUS.OK && !emptyIsFine) {
       throw new MocaCommandError(response.status, response.message, { result });
     }
     return options.format === 'full' ? result : rows;
   }
 
-  async #post(
-    query: string,
-    environment: MocaEnvironment,
-    autocommit: boolean,
-    signal: AbortSignal | undefined,
-  ): Promise<RawResponse> {
+  /**
+   * Every request, including the login, logout and dryRun, is sent with autocommit="true": MOCA
+   * commits at the end of the request and rolls it all back on error. autocommit="false" leaves the
+   * transaction open on a pooled database connection (spec §14 item 8), so it is never sent.
+   */
+  async #post(query: string, environment: MocaEnvironment, signal: AbortSignal | undefined): Promise<RawResponse> {
     const text = await this.#transport({
       url: this.#config.url,
-      body: buildRequest(query, environment, autocommit),
+      body: buildRequest(query, environment, true),
       timeoutMs: this.#config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       ignoreSslIssues: this.#config.ignoreSslIssues ?? false,
       signal,
@@ -425,9 +501,7 @@ export class MocaClient {
     const { username, password } = this.#config;
     const command = `login user where usr_id = ${quoteMocaString(username)} and usr_pswd = ${quoteMocaString(password)}`;
     try {
-      // autocommit="true": with "false", MOCA leaves the (empty) transaction open on the pooled
-      // database connection that served the login, where an unrelated later request inherits it.
-      const response = await this.#post(command, { USR_ID: username }, true, undefined);
+      const response = await this.#post(command, { USR_ID: username }, undefined);
       if (response.status !== MOCA_STATUS.OK) {
         throw new MocaAuthError(
           `MOCA login failed with status ${response.status}${response.message ? `: ${response.message}` : ''}`,
@@ -455,6 +529,7 @@ export class MocaClient {
 
   #resolve(opts: CallOptions): ResolvedOptions {
     assertNoAutocommit(opts, 'autocommit');
+    assertDryRunOption(opts);
     const defaults = this.#config.defaults ?? {};
     return {
       format: opts.format ?? 'rows',
