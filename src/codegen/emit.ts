@@ -47,8 +47,17 @@ function propertyName(name: string): string {
   return isIdentifier(name) && name !== '__proto__' ? name : str(name);
 }
 
+/**
+ * An argument as emitted. `required` is *effective* requiredness: flagged by the server and enforced
+ * by MOCA for this command's type. `notEnforced` marks a flagged argument MOCA does not enforce.
+ */
+interface EmitArg extends SnapshotArg {
+  notEnforced?: boolean;
+}
+
 /** A command as emitted: arguments renamed, filtered and de-duplicated, plus what was set aside. */
 interface EmitCommand extends SnapshotCommand {
+  args: EmitArg[];
   /** The first wildcard argument (`@*`, `*`, `x.*`) the server listed, raw: extra arguments pass through. */
   wildcard: string | undefined;
   /** Optional arguments that can only be passed on the MOCA stack, as `name (DTYPE)`. */
@@ -68,14 +77,25 @@ function isWildcardArg(name: string): boolean {
 
 const isStackArg = (arg: SnapshotArg): boolean => classifyMocaType(arg.dtype) === 'stack';
 
+/**
+ * MOCA enforces `argreq` (status 507 when a flagged argument is missing) only for compiled
+ * commands: C Function, Simple C Function, Java Method. Local Syntax scripts get no check, so a
+ * flagged argument there is really optional. A command without a type (older snapshots) keeps the
+ * conservative reading: flagged means required.
+ */
+function enforcesRequired(command: SnapshotCommand): boolean {
+  return command.type?.trim().toLowerCase() !== 'local syntax';
+}
+
 type ArgsOutcome =
   | { skip: string }
-  | { args: SnapshotArg[]; wildcard: string | undefined; stackOnly: string[]; warnings: string[] };
+  | { args: EmitArg[]; wildcard: string | undefined; stackOnly: string[]; warnings: string[] };
 
 /** Applies the argument rules of spec §11 to one command's raw server arguments. */
 function normalizeArgs(command: SnapshotCommand): ArgsOutcome {
+  const enforced = enforcesRequired(command);
   const badRequired = command.args.find(
-    (arg) => arg.required && !isWildcardArg(arg.name) && !isMocaArgName(bareArgName(arg.name)),
+    (arg) => arg.required && enforced && !isWildcardArg(arg.name) && !isMocaArgName(bareArgName(arg.name)),
   );
   if (badRequired !== undefined) {
     return {
@@ -118,10 +138,11 @@ function normalizeArgs(command: SnapshotCommand): ArgsOutcome {
     merged[first.index] = { ...base, required: kept.required || renamed.required };
   }
 
-  // Pass 2: set aside stack-typed arguments.
-  const args: SnapshotArg[] = [];
+  // Pass 2: apply effective requiredness, and set aside stack-typed arguments.
+  const args: EmitArg[] = [];
   const stackOnly: string[] = [];
-  for (const arg of merged) {
+  for (const flagged of merged) {
+    const arg: EmitArg = flagged.required && !enforced ? { ...flagged, required: false, notEnforced: true } : flagged;
     if (!isStackArg(arg)) {
       args.push(arg);
       continue;
@@ -141,8 +162,10 @@ function normalizeArgs(command: SnapshotCommand): ArgsOutcome {
  * sorts lowest, and applies the argument rules of `normalizeArgs`: a leading `@`/`@+` is stripped;
  * wildcard arguments are removed and mark the command as pass-through; optional stack-typed
  * arguments are set aside; repeated names (ignoring case) merge into the first entry (see
- * `normalizeArgs`); names `renderCommand` would reject (not `[A-Za-z_][A-Za-z0-9_]*`) are dropped when optional. A command with an invalid
- * or stack-typed *required* argument could never be called this way, so it is skipped entirely.
+ * `normalizeArgs`); names `renderCommand` would reject (not `[A-Za-z_][A-Za-z0-9_]*`) are dropped when optional. "Required" means
+ * effectively required: flagged by the server on a command whose type MOCA enforces it for (not
+ * Local Syntax). A command with an invalid or stack-typed *required* argument could never be called
+ * this way, so it is skipped entirely.
  * Returns the commands sorted by name, so the output does not depend on input order.
  */
 function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: EmitCommand[]; warnings: string[] } {
@@ -172,10 +195,13 @@ function normalizeCommands(commands: readonly SnapshotCommand[]): { commands: Em
   return { commands: result, warnings };
 }
 
-function emitArgsInterface(name: string, args: SnapshotArg[]): string[] {
+const NOT_ENFORCED_NOTE = 'marked required by MOCA; not enforced for Local Syntax commands';
+
+function emitArgsInterface(name: string, args: EmitArg[]): string[] {
   const lines = [`export interface ${name} {`];
   for (const arg of args) {
-    const summary = doc([arg.description, arg.dtype ? `(${arg.dtype})` : ''].filter(Boolean).join(' '));
+    const described = doc([arg.description, arg.dtype ? `(${arg.dtype})` : ''].filter(Boolean).join(' '));
+    const summary = arg.notEnforced ? [described, NOT_ENFORCED_NOTE].filter(Boolean).join(' · ') : described;
     if (summary !== '') lines.push(`  /** ${summary} */`);
     const type = tsType(arg.dtype);
     lines.push(arg.required ? `  ${propertyName(arg.name)}: ${type};` : `  ${propertyName(arg.name)}?: ${type} | null;`);

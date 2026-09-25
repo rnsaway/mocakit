@@ -32,7 +32,7 @@ describe('runGenerate', () => {
     await runGenerate({ fromSnapshot: fixture, out: 'gen/moca.ts', dryRun: false, cwd: dir, env: {}, io: cliIo });
     const code = await readFile(join(dir, 'gen/moca.ts'), 'utf8');
     expect(code).toContain('export class Moca extends mk.MocaClient');
-    expect(out.at(-1)).toBe(`Wrote 8 commands to ${join(dir, 'gen/moca.ts')}`);
+    expect(out.at(-1)).toBe(`Wrote 10 commands to ${join(dir, 'gen/moca.ts')}`);
     expect(err).toEqual([
       'warning: Command "consume widget pointer" requires stack argument "widget_ptr" (POINTER); skipped (run it with exec())',
       'warning: Command "list orders" argument "odd-name" is not a valid MOCA argument name; dropped the argument',
@@ -77,7 +77,7 @@ describe('runGenerate', () => {
     const { io: cliIo, out } = io();
     await runGenerate({ fromSnapshot: fixture, out: 'gen/moca.ts', dryRun: true, cwd: dir, env: {}, io: cliIo });
     await expect(readFile(join(dir, 'gen/moca.ts'), 'utf8')).rejects.toThrow();
-    expect(out.at(-1)).toMatch(/^Would write 8 commands/);
+    expect(out.at(-1)).toMatch(/^Would write 10 commands/);
   });
 
   it('resolves a config-relative out against the config file directory, not the cwd', async () => {
@@ -200,8 +200,8 @@ describe('runGenerate', () => {
     await writeFile(snapshotFile, JSON.stringify(snapshot));
     const { io: cliIo, out } = io();
     await runGenerate({ fromSnapshot: snapshotFile, out: 'gen/moca.ts', dryRun: false, cwd: dir, env: {}, io: cliIo });
-    expect(out.at(-1)).toBe(`Wrote 8 commands to ${join(dir, 'gen/moca.ts')}`);
-    expect(await readFile(join(dir, 'gen/moca.ts'), 'utf8')).toMatch(/— 8 commands\./);
+    expect(out.at(-1)).toBe(`Wrote 10 commands to ${join(dir, 'gen/moca.ts')}`);
+    expect(await readFile(join(dir, 'gen/moca.ts'), 'utf8')).toMatch(/— 10 commands\./);
   });
 
   it('prints at most 50 warnings, then a count of the rest', async () => {

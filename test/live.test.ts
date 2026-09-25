@@ -6,7 +6,8 @@ import { runGenerate } from '../src/cli/generate.js';
 import { IGNORE_SSL_TRUE } from '../src/cli/load-config.js';
 import { MocaClient } from '../src/client/client.js';
 import { introspect } from '../src/codegen/introspect.js';
-import { isMocaStatus } from '../src/errors.js';
+import type { Snapshot } from '../src/codegen/snapshot.js';
+import { isMocaStatus, MocaCommandError } from '../src/errors.js';
 import { buildRequest } from '../src/protocol/request.js';
 import { parseResponse } from '../src/protocol/response.js';
 import { httpTransport } from '../src/transport/http.js';
@@ -19,6 +20,7 @@ live('live MOCA server', () => {
   // callback, and MocaClient's constructor now throws on blank credentials -- which env vars
   // are when MOCA_URL is unset.
   let client: MocaClient;
+  let snapshot: Snapshot | undefined;
 
   beforeAll(() => {
     client = new MocaClient({
@@ -62,10 +64,28 @@ live('live MOCA server', () => {
   }, 120_000);
 
   it('introspects', async () => {
-    const { snapshot, warnings } = await introspect(client, { version: 'live', server: process.env.MOCA_URL! });
-    console.log(`introspected ${snapshot.commands.length} commands; warnings:`, warnings);
+    const result = await introspect(client, { version: 'live', server: process.env.MOCA_URL! });
+    snapshot = result.snapshot;
+    console.log(`introspected ${snapshot.commands.length} commands; warnings:`, result.warnings);
     expect(snapshot.commands.length).toBeGreaterThan(0);
     expect(snapshot.commands.some((c) => c.args.length > 0)).toBe(true);
+  }, 600_000);
+
+  it('enforces a flagged argument on a compiled command with status 507 (spec §14)', async () => {
+    snapshot ??= (await introspect(client, { version: 'live', server: process.env.MOCA_URL! })).snapshot;
+    const compiled = new Set(['c function', 'java method']);
+    const stackTypes = new Set(['POINTER', 'RESULTS', 'OBJECT', 'BINARY']);
+    const command = snapshot.commands.find((c) => {
+      if (!compiled.has(c.type?.trim().toLowerCase() ?? '') || !c.name.startsWith('list ')) return false;
+      const flagged = c.args.filter((a) => a.required);
+      return flagged.length === 1 && !stackTypes.has(flagged[0]!.dtype.trim().toUpperCase());
+    });
+    expect(command, 'a list command of type C Function or Java Method with one flagged argument').toBeDefined();
+    // Read-only: a `list` command, called without its one required argument, so MOCA rejects it.
+    const error = await client.exec(command!.name).catch((e: unknown) => e);
+    console.log('missing required argument -> status', error instanceof MocaCommandError ? error.status : 'not a MocaCommandError');
+    expect(error).toBeInstanceOf(MocaCommandError);
+    expect((error as MocaCommandError).status).toBe(507);
   }, 600_000);
 
   it('returns [] for a query with no rows (510), and throws 510 with noRowsIsError', async () => {

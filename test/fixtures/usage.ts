@@ -65,6 +65,14 @@ export async function check(): Promise<void> {
   // @ts-expect-error a command with a required POINTER argument is not generated
   await moca.consumeWidgetPointer();
 
+  // MOCA only enforces flagged arguments on compiled commands, not Local Syntax ones.
+  await moca.listGadgetBins({});
+  await moca.listGadgetBins();
+  await moca.listGadgetBins({ gadget_id: null });
+  await moca.validateGadget({ gadget_id: 'G1' });
+  // @ts-expect-error required by MOCA for Java commands
+  await moca.validateGadget({});
+
   const args: ListOrdersArgs = { wh_id: 'W', adddte: new Date(), cancel_flg: true, ordnum: null };
   void [qty, status, fullRows, x, eitherUnknown, firstRow, bad, args];
 }

@@ -493,6 +493,16 @@ Argument names, in server order:
   as `\@*`).
 - **`@name` / `@+name`** refers to argument `name` read from the stack. One leading `@+` or `@` is stripped before
   validation; the interface, spec table and rendered `where` clause all use the bare name.
+- **Requiredness depends on the command type.** An argument is *effectively required* when its (merged, below)
+  `argreq` flag is set **and** the command's `type` is not Local Syntax (compared trimmed and case-insensitively).
+  MOCA enforces `argreq` only for compiled commands (C Function, Simple C Function, Java Method), with status 507;
+  a Local Syntax script gets no check (§14). A command with no `type` (older snapshots) keeps the conservative
+  reading: flagged means required. Effective requiredness decides whether the interface property is optional,
+  the `required` flag in the spec table (so the runtime check in `renderCommand` agrees with the types),
+  `Command` vs `OptionalArgsCommand`, and the invalid-name and stack-argument rules below: a flagged argument on
+  a Local Syntax command is treated exactly like an optional one. Its property JSDoc gains
+  `marked required by MOCA; not enforced for Local Syntax commands` after the description and dtype. The
+  snapshot stays raw: it records `argreq` as the server reports it.
 - A name that is still not a valid MOCA argument name (`/^[A-Za-z_][A-Za-z0-9_]*$/`, the rule `renderCommand`
   enforces; e.g. a leading digit or spaces) is dropped with a warning when optional. When it is **required**, the
   command could never be called, so it is skipped with a warning.
@@ -519,7 +529,8 @@ The file contains:
 - One `export interface <Method>Args` per command that has arguments, named after its method in PascalCase, so it
   inherits the method's collision suffix (`listOrders_2` → `ListOrders_2Args`). Commands with no arguments use
   `mk.NoArgs` (`Record<string, never>`) instead. Each property has JSDoc with its description and dtype, and
-  required args are non-optional.
+  effectively required args (above) are non-optional. A flagged but unenforced (Local Syntax) arg is optional and
+  its JSDoc ends with `· marked required by MOCA; not enforced for Local Syntax commands`.
 - Server text in JSDoc is sanitised: `*/` becomes `*\/`; an `@` at the start or after a character that is not a
   word character or backslash becomes `\@` (so no JSDoc tags or `{@link}`s); every whitespace run becomes one
   space, and the result is trimmed. In a method's summary, backticks in the command name become `'`.
@@ -567,7 +578,7 @@ A live server reports exactly nine `argtyp` values (§14); there is no date argt
 | `INTEGER`, `FLOAT` (also `I`, `F`, …) | number | `number` |
 | `FLAG` (also `O`, …) | boolean | `boolean` (rendered `1`/`0`) |
 | `UNKNOWN` | any | `string \| number \| boolean \| Date` (rendered by runtime type, §6) |
-| `POINTER`, `RESULTS`, `OBJECT`, `BINARY` | stack | not emitted: optional → JSDoc note, required → command skipped (above) |
+| `POINTER`, `RESULTS`, `OBJECT`, `BINARY` | stack | not emitted: optional → JSDoc note, effectively required → command skipped (above) |
 | date (`D`, …; not seen in `argtyp`) | date | `string \| Date` |
 | anything else | string | `string` |
 
@@ -646,5 +657,13 @@ Confirmed on a live server (a snapshot of 10,354 active commands) with the live 
    not executed. That is what the single post-523 re-login and retry relies on. (A command making nested
    `remote(...)` calls was not exercised separately.)
 6. **510.** A no-rows SQL query returns status 510, which mocakit maps to `[]` (or throws with `noRowsIsError`).
+7. **`argreq` is enforced only for compiled commands.** Calling a C Function or Java Method command without an
+   argument flagged `argreq` returns status 507, `Command <name> : Arg <arg> is required` (checked by the live
+   suite). Local Syntax commands are **not** checked: e.g. `list user roles` flags `usr_id` but succeeds without
+   it and returns every user's roles; what a missing argument means is up to each script. Session environment
+   variables do **not** satisfy a required argument: a C/Java command still returns 507 for a missing `wh_id`
+   with `WH_ID` set in the environment. On the live instance 2,424 Local Syntax commands carry flagged
+   arguments, and 16 were wrongly skipped by the required-stack-argument rule before §11 took the type into
+   account.
 
 (`logout user` is confirmed to exist.)

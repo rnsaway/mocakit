@@ -210,6 +210,12 @@ The generator also warns and adjusts, rather than emitting code that can't work:
   never be called.
 - A command with a *required* stack-only argument (see [Argument types](#argument-types)) is skipped with
   `Command "x" requires stack argument "y" (RESULTS); skipped (run it with exec())`.
+- "Required" follows what MOCA actually enforces. MOCA rejects a missing `argreq` argument (status 507) only for
+  compiled commands (C Function, Simple C Function, Java Method). Local Syntax commands don't check it, so there
+  a flagged argument is generated as optional, with the JSDoc note `marked required by MOCA; not enforced for
+  Local Syntax commands`, and the command is never skipped for it. Commands without a type (older snapshots)
+  treat every flagged argument as required. Session environment variables such as `WH_ID` don't satisfy a
+  required argument.
 
 If you run a generated file against a *newer* mocakit that has added a client member with the same name as one of
 your commands, that command isn't installed (the client member wins) and a process warning tells you to regenerate.

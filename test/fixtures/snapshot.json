@@ -18,6 +18,9 @@
     ] },
     { "name": "exec", "level": "base", "args": [] },
     { "name": "list active commands", "level": "mcsbase", "description": "Lists */ active commands", "args": [] },
+    { "name": "list gadget bins", "level": "wmd", "type": "Local Syntax", "description": "Lists gadget bins", "args": [
+      { "name": "gadget_id", "dtype": "STRING", "required": true, "description": "Gadget" }
+    ] },
     { "name": "list orders", "level": "wmd", "description": "Lists orders", "args": [
       { "name": "ordnum", "dtype": "S", "required": false, "description": "Order number" },
       { "name": "wh_id", "dtype": "S", "required": true, "description": "Warehouse" },
@@ -36,6 +39,9 @@
       { "name": "result_set", "dtype": "RESULTS", "required": false },
       { "name": "widget_id", "dtype": "STRING", "required": false },
       { "name": "blob", "dtype": "BINARY", "required": false }
+    ] },
+    { "name": "validate gadget", "level": "wmd", "type": "Java Method", "args": [
+      { "name": "gadget_id", "dtype": "STRING", "required": true, "description": "Gadget" }
     ] }
   ]
 }
