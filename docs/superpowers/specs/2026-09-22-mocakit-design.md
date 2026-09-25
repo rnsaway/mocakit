@@ -56,11 +56,13 @@
 </moca-request>
 ```
 
-Environment vars with `undefined`, `null` or `''` values are omitted. The query text is XML-escaped (`& < >`) and
+Every request is sent with `autocommit="true"`, except a `dryRun` request (§7a), which uses `"false"`. The
+attribute is not configurable. Environment vars with `undefined`, `null` or `''` values are omitted. The query text is XML-escaped (`& < >`) and
 attribute values are also escaped for `"`.
 
-**Login:** `login user where usr_id = '<user>' and usr_pswd = '<password>'`, sent with `autocommit="false"` and
-only `USR_ID` in the environment. On status 0, `session_key` is read from row 0 (case-insensitive column match,
+**Login:** `login user where usr_id = '<user>' and usr_pswd = '<password>'`, sent with `autocommit="true"` and
+only `USR_ID` in the environment. (0.1.0 sent it with `autocommit="false"`, copied from n8n-nodes-moca; that leaves a
+transaction open on a pooled database connection, see §7a and §14 item 8.) On status 0, `session_key` is read from row 0 (case-insensitive column match,
 falling back to column position 5), and `locale_id` from row 0 (fallback position 2).
 
 **Response:**
@@ -120,8 +122,9 @@ Each unit has one job and can be tested in isolation:
 - **session**: `SessionManager` exposes `acquire()` (fresh session from memory, the store, or a single-flight
   login), `peek()` (cached fresh session or `null`, never logs in), `adopt(state)` (store an explicitly obtained
   session) and `invalidate(stale)` (compare-then-delete). 523 handling lives in `MocaClient`, not here.
-- **client**: `MocaClient` exposes `exec`, `call`, `login`, `logout`, `session`. `defineCommands(proto, specs)`
-  installs generated methods.
+- **client**: `MocaClient` exposes `exec`, `call`, `batch`, `login`, `logout`, `session`. `defineCommands(proto, specs)`
+  installs generated methods and attaches each spec to its method (under a module-private symbol) so that
+  `batch` can build steps from them.
 - **codegen**: `introspect(client, options) → Promise<{ snapshot, warnings }>`,
   `emit(snapshot, options) → { code, warnings, count }`, `filterCommands(commands, filter)`,
   `readSnapshot`/`writeSnapshot`.
@@ -142,7 +145,7 @@ const moca = createMoca({
   ignoreSslIssues: false,
   timeoutMs: 300_000,
   session: { reuse: true, maxAgeMinutes: 30, store: undefined },
-  defaults: { convert: true, noRowsIsError: false, autocommit: true },
+  defaults: { convert: true, noRowsIsError: false },
 });
 
 const orders = await moca.listOrders({ wh_id: 'WMD1', ordnum: 'A1' });
@@ -164,7 +167,7 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
 | `session.reuse` | `boolean` | `true` | Share cached sessions across clients with the same credentials |
 | `session.maxAgeMinutes` | `number` | `30` | `0` or negative = reuse until the server rejects it; must be finite |
 | `session.store` | `SessionStore?` | in-memory | See §7. Combining it with `reuse: false` throws `MocaArgumentError` |
-| `defaults` | `{ convert?, noRowsIsError?, autocommit? }` | see below | Client-wide call defaults. `format` is per call only, so return types stay statically known. |
+| `defaults` | `{ convert?, noRowsIsError? }` | see below | Client-wide call defaults. `format` and `dryRun` are per call only (so return types stay statically known, and a rollback is always explicit). An `autocommit` key throws `MocaArgumentError` (removed in 0.2.0). |
 
 ### `CallOptions`
 
@@ -173,10 +176,16 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
 | `format` | `'rows' \| 'full'` | `'rows'` | Return type follows via overloads |
 | `convert` | `boolean` | `true` | Type-convert values from column metadata |
 | `noRowsIsError` | `boolean` | `false` | Status 510 throws `MocaCommandError` instead of returning `[]` |
-| `autocommit` | `boolean` | `true` | `moca-request autocommit` attribute |
+| `dryRun` | `boolean` | `false` | Run, return the rows, then roll back (§7a). Sent with `autocommit="false"` |
 | `env` | `Record<string, string>` | — | Extra/override environment vars for this call |
 | `extraArgs` | `Record<string, MocaArgValue>` | — | Undeclared arguments appended to the `where` clause (`call` and generated methods only; `exec` rejects it) |
 | `signal` | `AbortSignal` | — | Aborts the HTTP request |
+
+`autocommit` was removed in 0.2.0. Because JavaScript callers (or casts) can still pass it, any **own** property named
+`autocommit` in a call's options or in `config.defaults` throws `MocaArgumentError`: *The autocommit option was
+removed in mocakit 0.2.0: autocommit=false leaves the transaction open on a pooled database connection. Use {
+dryRun: true } to roll back, or moca.batch() for several commands in one transaction.* `BatchOptions` is
+`CallOptions` without `extraArgs`.
 
 ### Methods
 
@@ -184,6 +193,8 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
   non-empty `opts.extraArgs` throws `MocaArgumentError` (`extraArgs is not supported by exec(); …`) rather than
   being silently dropped from a command that may have side effects.
 - `call<T>(spec, args, opts?)`: used by generated functions; validates, renders, executes.
+- `batch<T = MocaRow>(build, opts?: BatchOptions)`: runs several commands as one request, in one transaction; see
+  §7a. Overloaded like `exec`: `T[]`, `MocaResult<T>` for `format: 'full'`, or the union.
 - `login()`: forces its own login now (fail fast, bypassing single-flight) and stores the new session; returns the
   login row converted per `defaults.convert`, with the session key removed: any `session_key` column
   (case-insensitive) and any column whose raw value equals the key (e.g. when it was found by the position-5 fallback).
@@ -193,7 +204,8 @@ const raw = await moca.exec("[select count(*) cnt from ord]");
 - `session`: read-only `{ active: boolean; locale: string | null; ageMs: number | null }`. The key is never exposed.
 
 The constructor throws `MocaArgumentError` for a blank (or non-string) `url`/`username`/`password`, a non-finite
-`maxAgeMinutes`, an out-of-range `timeoutMs`, or `session.store` combined with `session.reuse: false`.
+`maxAgeMinutes`, an out-of-range `timeoutMs`, `session.store` combined with `session.reuse: false`, or an
+`autocommit` key in `defaults`.
 `createMoca(config, deps?)` / `new MocaClient(config, deps?)` take optional `MocaClientDeps` (`{ transport?, now? }`).
 
 ## 6. Argument rendering
@@ -262,6 +274,59 @@ Rules:
 - **Environment:** every request sends `USR_ID`, `SESSION_KEY`, and `WH_ID`/`DEVCOD`/`LOCALE_ID` when set
   (`LOCALE_ID` falls back to the login locale). `opts.env` merges on top, except that `USR_ID` and `SESSION_KEY`
   cannot be overridden (case-insensitive; `MocaArgumentError`).
+
+## 7a. Transactions
+
+**MOCA has no cross-request transactions.** Every HTTP request runs on a different pooled database connection
+(§14 item 8), so a transaction can never span two requests, whatever the client does. What mocakit offers instead
+works within one request:
+
+- **Every request commits at its end.** With `autocommit="true"` (always sent, including the login) MOCA commits
+  when the request finishes, and any error rolls back the whole request.
+- **`dryRun: true`** (on `exec`, `call`, generated methods and `batch`) wraps the final MOCA text exactly as
+
+  ```
+  try { <text> } finally { try { [rollback] } catch (@?) { noop } }
+  ```
+
+  and sends it with `autocommit="false"`. The command's rows (or full result) are returned unchanged, and its writes
+  are rolled back. `[rollback]` raises SQL Server error 511 when no transaction was started (the command touched no
+  table), and MOCA reports every SQL Server error as 511, so the guard must be the catch-all `catch (@?)`. The
+  wrapper leaves nothing open (§14 item 10). `error.command` is the wrapped text (still redacted).
+- **`moca.batch(build, opts?)`** runs several commands in one request, so they commit or roll back together:
+
+  ```ts
+  const rows = await moca.batch((b) => [
+    b.listOrders({ wh_id: 'WMD1' }),         // every generated command, same argument types
+    b.raw("[update ord set ... where ...]"), // raw MOCA text
+  ]);
+  ```
+
+  - `b` is a `BatchBuilder<this>`: a mapped type keeping only the members typed `Command<A, N>` (mapped to
+    `(args: A) => BatchStep`) or `OptionalArgsCommand<A, N>` (`(args?: A) => BatchStep`), plus
+    `raw(mocaText: string)`. Client methods (`exec`, `login`, …) are not on it. The two command interfaces carry a
+    phantom optional brand (`readonly [commandKind]?: 'required' | 'optional'`, a `declare`d unique symbol that never
+    exists at runtime): without `strictFunctionTypes` they are otherwise mutually assignable, and the brand key is
+    also how the mapped type recognises commands. It does not change how generated code type-checks, and the
+    generated file is unchanged. On a 10,240-command client, a `batch` call added no measurable `tsc` check time
+    (medians 5.65 s with vs 5.56 s without, over nine runs each with about ±1.5 s of noise; ~1.0 GB either way).
+  - At runtime `b` is a `Proxy`: `raw` returns the raw-step factory; any other name looks up `client[name]`, and if
+    that is a method installed by `defineCommands` (it carries its spec), returns a factory rendering that spec with
+    `renderCommand`; anything else is `undefined`. Arguments are therefore validated as each step is built, and a
+    `MocaArgumentError` (with `command` = the MOCA command name) means nothing was sent.
+  - A `BatchStep` is an opaque, frozen `{ moca }` object; the client only accepts steps its builders created
+    (tracked in a module-private `WeakSet`), so a look-alike object is rejected. `b.raw('')` (blank text) is rejected.
+  - The steps are joined with ` ;` and a newline, each in braces: `{ <step1> } ;` / `{ <step2> } ;` / … / `{ <stepN> }`.
+    The braces make a pipe inside a raw step bind within it. The text is sent once with `autocommit="true"`; with
+    `opts.dryRun` the whole joined text is wrapped as above and sent with `autocommit="false"`.
+  - It resolves to the **last** step's rows, which is what MOCA returns for `A ; B` (§14 item 9).
+  - An empty step list, a non-`BatchStep` element, or `extraArgs` in the options throws `MocaArgumentError` before
+    anything is sent. A server error is an ordinary `MocaCommandError` whose `command` is the full (redacted) batch
+    text.
+
+**Limits.** A command that commits internally cannot be undone by `dryRun` or by a failing later step of a batch.
+There is no JavaScript between batch steps: a step can't depend on an earlier step's result except through MOCA
+itself (e.g. pipes inside one `raw` step). Only the last step's rows come back.
 
 ## 8. Response format
 
@@ -373,11 +438,11 @@ All command failures throw; there is no non-throwing variant.
 
 | Class (extends `MocaError`) | Raised when | Extra fields |
 |---|---|---|
-| `MocaCommandError` | server status ≠ 0 (and ≠ 510 unless `noRowsIsError`); also a failed `logout user` (other than 523) | `status`, `serverMessage`, `result` (partial `MocaResult` if any) |
+| `MocaCommandError` | server status ≠ 0 (and ≠ 510 unless `noRowsIsError`); also a failed `logout user` (other than 523). For a `dryRun` call `command` is the wrapped text; for a `batch` it is the full joined batch text | `status`, `serverMessage`, `result` (partial `MocaResult` if any) |
 | `MocaAuthError` | login returned status ≠ 0, login returned no `session_key`, or a second 523 right after re-login | `status` |
 | `MocaTransportError` | invalid service URL, credentials embedded in the URL, network/TLS/timeout/abort, redirect, HTTP non-2xx, empty body | `cause`, `httpStatus?` |
 | `MocaProtocolError` | body is not parseable as a moca-response | `rawSnippet` (first 500 chars) |
-| `MocaArgumentError` | missing/`null` required arg; unknown arg or wrong casing of a declared one; duplicate `extraArgs` key; invalid arg name; unrenderable number, invalid `Date` or unsupported value type; `USR_ID`/`SESSION_KEY` env override; a character not allowed in XML 1.0 in the query or environment; invalid `MocaConfig` (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `store` with `reuse: false`); `extraArgs` passed to `exec` | `argument` |
+| `MocaArgumentError` | missing/`null` required arg; unknown arg or wrong casing of a declared one; duplicate `extraArgs` key; invalid arg name; unrenderable number, invalid `Date` or unsupported value type; `USR_ID`/`SESSION_KEY` env override; a character not allowed in XML 1.0 in the query or environment; invalid `MocaConfig` (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `store` with `reuse: false`, `autocommit` in `defaults`); `extraArgs` passed to `exec` or `batch`; `autocommit` in a call's or batch's options (removed in 0.2.0); a `batch` with no steps, a step that is not a `BatchStep`, or `b.raw` with blank text; a batch step whose arguments fail validation (raised while the step is built) | `argument` |
 
 `MocaError` base fields: `message`, `status` (`-1` for non-server errors), `command` (the MOCA text that was, or
 would have been, sent), `args`, and `toJSON()` (so `JSON.stringify(error)` includes those fields).
@@ -591,9 +656,9 @@ case-insensitively. All optional argument types also accept `null`, which remove
 - Command name → Unicode NFKD with combining marks removed → lowercase → split on runs of non-`[a-z0-9]` →
   camelCase (`list active commands` → `listActiveCommands`). A name with no such characters becomes `command`. A
   leading digit gets an `_` prefix.
-- Reserved names get a `cmd` prefix (`exec` → `cmdExec`): the client members `exec`, `call`, `login`, `logout`,
-  `session`, plus `constructor`, `then` (so a client is never mistaken for a thenable) and every
-  `Object.prototype` name. A test keeps this list in sync with `MocaClient`'s actual members.
+- Reserved names get a `cmd` prefix (`exec` → `cmdExec`): the client members `exec`, `call`, `batch`, `login`,
+  `logout`, `session`, plus `raw` (the batch builder's raw-step factory), `constructor`, `then` (so a client is
+  never mistaken for a thenable) and every `Object.prototype` name. A test keeps this list in sync with `MocaClient`'s actual members.
 - Collisions after conversion get `_2`, `_3` (in code-unit order of the MOCA name), and the CLI prints a warning.
 - Arg interface names are the method name in PascalCase + `Args`, so they carry the same collision suffixes.
 - Argument names are kept verbatim after stripping a leading `@`/`@+` (only valid MOCA argument names reach this
@@ -633,7 +698,11 @@ case-insensitively. All optional argument types also accept `null`, which remove
   values; the source of §14 items 1–3), full introspection, 510 behavior (`[select 1 x from dual where 1 = 0]` returns `[]`,
   and throws 510 with `noRowsIsError`; a non-Oracle dialect is logged and skipped), a raw request with a bogus
   `SESSION_KEY` (logs the status/message and asserts it is non-zero; the source of §14 item 5), and `runGenerate` with
-  `dryRun: true` from env vars (asserts `Would write …` and that no files are written).
+  `dryRun: true` from env vars (asserts `Would write …` and that no files are written). Transactions (§7a), each on
+  its own global temp table `##mk_<timestamp>_<suffix>` (tempdb only; dropped in `finally`; only statuses, counts and
+  booleans are logged): a `dryRun` `exec` that creates, inserts and counts (count 1, table absent afterwards); a
+  committed `batch` (table present afterwards); a `batch` whose second step fails (`MocaCommandError`, table absent);
+  and a `dryRun` batch (table absent).
 
 ## 14. Live-server findings
 
@@ -667,5 +736,20 @@ Confirmed on a live server (a snapshot of 10,354 active commands) with the live 
    account. The rule matches the descriptive `type` column (`Local Syntax`), not the coded `cmdtyp`. Any other
    value, a misspelling, or a missing `type` counts as enforced, so a server that exposed only a coded type would
    fall back to enforcing every flagged argument: the conservative choice.
+
+8. **Every HTTP request runs on a different pooled database connection** (SQL Server backend), so transactions
+   can never span requests. `autocommit="false"` **leaks** transactions: MOCA neither commits nor rolls back, and
+   the transaction stays open on the pooled connection until an unrelated request reuses it. That included the
+   login, which 0.1.0 sent with `autocommit="false"`. `autocommit="true"` is atomic per request: MOCA commits at the
+   end, and any error rolls back the whole request (a `##temp` table created in step 1 of a request whose step 2
+   failed did not survive).
+9. **`A ; B` returns only B's rows**, and `try { A } finally { B }` returns A's rows and still runs B.
+10. **dryRun.** `try { <cmd> } finally { try { [rollback] } catch (@?) { noop } }` sent with `autocommit="false"`
+    returns `<cmd>`'s rows, undoes its writes (a `##temp` table created inside did not survive) and leaves nothing
+    open. `[rollback]` raises SQL Server error 511 when no transaction was started; MOCA reports every SQL Server
+    error as status 511, so `catch (511)` is not specific enough and `catch (@?)` is required. The live suite
+    re-checks items 8–10 (§13).
+11. **MOCA intercepts `@@name` inside `[...]`**, so SQL Server's `@@` functions can't be used in SQL sent through
+    MOCA as written.
 
 (`logout user` is confirmed to exist.)

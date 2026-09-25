@@ -269,7 +269,7 @@ Besides `url`/`username`/`password`, `createMoca`/`MocaConfig` also accepts:
 | `ignoreSslIssues` | `false` | Skip TLS verification |
 | `timeoutMs` | `300000` | Per HTTP request (must be > 0 and at most 2147483647) |
 | `session` | see [Sessions](#sessions) | `{ reuse?, maxAgeMinutes?, store? }` |
-| `defaults` | — | Client-wide call defaults: `{ convert?, noRowsIsError?, autocommit? }` |
+| `defaults` | — | Client-wide call defaults: `{ convert?, noRowsIsError? }` |
 
 `createMoca(config, deps?)` also takes an optional second argument, `{ transport?, now? }`, mainly for tests. A custom
 `transport` receives every request body verbatim — including the **password** (in the `login user` request) and
@@ -305,10 +305,13 @@ Every call (`exec`, `call`, and every generated method) accepts:
 | `format` | `'rows'` | `'rows'` → `T[]`; `'full'` → `{ status, message, columns, rows }` |
 | `convert` | `true` | Type-convert values from column metadata |
 | `noRowsIsError` | `false` | Status 510 throws instead of returning `[]` |
-| `autocommit` | `true` | The `moca-request autocommit` attribute |
+| `dryRun` | `false` | Run the command, return its rows, then roll it back (see [Transactions](#transactions-batch--dryrun)) |
 | `env` | — | Extra/override environment vars for this call only (can't override `USR_ID`/`SESSION_KEY`) |
 | `extraArgs` | — | Undeclared arguments, appended to the `where` clause (not supported by `exec`) |
 | `signal` | — | Aborts the HTTP request |
+
+`moca.batch()` takes the same options except `extraArgs`. There is no `autocommit` option any more (see
+[Upgrading from 0.1.0](#upgrading-from-010)).
 
 ## Typing outputs
 
@@ -363,7 +366,7 @@ Everything throws a subclass of `MocaError` (`message`, `status`, `command`, `ar
 | `MocaAuthError` | Login failed, returned no `session_key`, or a second 523 right after re-login | — |
 | `MocaTransportError` | Invalid service URL, credentials embedded in the URL, network, TLS, timeout, abort, redirect, non-2xx HTTP, or empty body | `cause`, `httpStatus?` |
 | `MocaProtocolError` | Response body isn't parseable as `moca-response` | `rawSnippet` |
-| `MocaArgumentError` | Missing required argument, unknown/mis-cased argument, invalid argument name, unrenderable number/`Date`/value, `USR_ID`/`SESSION_KEY` in `opts.env`, a character XML 1.0 forbids in the query or environment, `extraArgs` on `exec`, or an invalid client config (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `session.store` with `reuse: false`) | `argument` |
+| `MocaArgumentError` | Missing required argument, unknown/mis-cased argument, invalid argument name, unrenderable number/`Date`/value, `USR_ID`/`SESSION_KEY` in `opts.env`, a character XML 1.0 forbids in the query or environment, `extraArgs` on `exec` or `batch`, an `autocommit` option (removed in 0.2.0), an empty batch or a batch step not built by the batch builder, or an invalid client config (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `session.store` with `reuse: false`) | `argument` |
 
 ```ts
 import { isMocaStatus } from 'mocakit';
@@ -385,6 +388,73 @@ try {
   after a 523 (session expired), which re-logs in and resends exactly once. A second 523 throws `MocaAuthError`.
 - `USR_ID` and `SESSION_KEY` cannot be overridden via `opts.env` on a per-call basis — that would let a caller
   silently run as a different user or session, so it throws `MocaArgumentError` instead.
+
+## Transactions: batch & dryRun
+
+**MOCA has no transactions that span requests.** Every HTTP request is served on a different pooled database
+connection, so there is no way to begin a transaction in one call and commit or roll it back in a later one. What
+mocakit gives you instead works inside a single request:
+
+- **Every request commits when it finishes**, and an error anywhere in it rolls the whole request back. mocakit
+  always sends `autocommit="true"`.
+- **`dryRun: true`** runs a command, returns its rows as usual, and then rolls back everything it wrote. It works on
+  generated methods, `exec` and `batch`:
+
+  ```ts
+  // What would this move do? Returns the rows, changes nothing.
+  const preview = await moca.exec(
+    "[update widget set qty = qty - 1 where widget_id = 'W1'] ; [select qty from widget where widget_id = 'W1']",
+    { dryRun: true },
+  );
+  await moca.createWidget({ widget_id: 'W1' }, { dryRun: true });
+  ```
+
+  Under the hood the MOCA text is wrapped in
+  `try { ... } finally { try { [rollback] } catch (@?) { noop } }` and sent with `autocommit="false"`, and
+  `error.command` shows that wrapped text.
+- **`moca.batch()`** sends several commands as **one** request, so they commit together or roll back together. The
+  builder `b` offers every generated command with the same typed arguments (autocomplete included), plus `b.raw()`
+  for raw MOCA text:
+
+  ```ts
+  const rows = await moca.batch((b) => [
+    b.createWidget({ widget_id: 'W1' }),
+    b.assignWidget({ widget_id: 'W1', stoloc: 'A-01' }),
+    b.raw("[select count(*) n from widget where widget_id = 'W1']"),
+  ]);
+  // rows → the LAST step's rows, e.g. [{ n: 1 }]
+
+  const full = await moca.batch((b) => [/* ... */], { format: 'full' });
+  await moca.batch((b) => [/* ... */], { dryRun: true }); // run the whole batch, then roll it all back
+  ```
+
+  Every step's arguments are validated as it is built, so a bad argument throws `MocaArgumentError` before anything
+  is sent. If any step fails on the server, the whole batch is rolled back and you get a `MocaCommandError` whose
+  `command` is the full batch text.
+
+**Limits — read these before relying on a rollback:**
+
+- **A command that commits internally can't be undone** by `dryRun` or by a later failing batch step. Some MOCA
+  commands commit on their own; once they have, nothing mocakit sends can take that back. Check what a command
+  does (or try it on a test system) before trusting `dryRun` with it.
+- **No JavaScript runs between batch steps.** The whole batch is one MOCA request, so a step can't use an earlier
+  step's result in JS. If a step needs another's output, write that as MOCA inside one `b.raw()` step (e.g. with a
+  pipe).
+- **A batch returns only the last step's rows**, because that is what MOCA returns for `A ; B`. Put the query whose
+  rows you want last.
+
+### Upgrading from 0.1.0
+
+The `autocommit` option is gone from call options and from `defaults`. `autocommit: false` never gave you a
+transaction you could control: MOCA left it open on a pooled database connection, where an unrelated later request
+would inherit it. Passing `autocommit` now throws `MocaArgumentError` (TypeScript rejects it too). Instead:
+
+- to try something and throw the changes away, use `{ dryRun: true }`;
+- to make several commands all-or-nothing, put them in one `moca.batch()`;
+- otherwise just drop the option: every request already commits when it succeeds and rolls back when it fails.
+
+Two names are now reserved: a MOCA command called `batch` or `raw` is generated as `cmdBatch` / `cmdRaw`.
+Regenerate your client after upgrading.
 
 ## Sessions
 
@@ -431,6 +501,10 @@ login, to stop waiting on it without cancelling that login for other callers).
     override listOrders = ((args, opts) => super.listOrders(args, opts as any)) as Moca['listOrders'];
   }
   ```
+
+- `moca.batch()`'s builder finds commands through the methods `defineCommands` installed. A command you
+  override (as above) is no longer available as `b.<name>` at runtime (it is `undefined`), even though its type is
+  still there; use `b.raw()` for it, or don't override commands you batch.
 
 - Don't detach a command from its client (`const f = moca.listOrders; f(...)`) — it relies on `this`, which is
   lost once it's called unbound. Call it as `moca.listOrders(...)`, or bind it explicitly if you need a reference.
