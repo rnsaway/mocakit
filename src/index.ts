@@ -10,7 +10,7 @@ export {
 } from './client/commands.js';
 export type { Query, QueryFilter, QueryRowsOptions } from './client/query.js';
 export { formatMocaDate, parseMocaDate } from './dates/codec.js';
-export { defineConfig, type MocakitConfig } from './define-config.js';
+export { defineConfig, type MocakitConfig, type SchemaConfig } from './define-config.js';
 export {
   MocaArgumentError,
   MocaAuthError,

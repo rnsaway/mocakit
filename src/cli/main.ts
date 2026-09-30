@@ -5,14 +5,16 @@ import { exposeOnProcessEnv, loadEnvFile } from './env-file.js';
 import { runGenerate, type CliIo } from './generate.js';
 
 const USAGE = [
-  'Usage: mocakit generate [--config <path>] [--out <path>] [--from-snapshot <path>] [--env-file <path> | --no-env-file] [--dry-run] [--verbose]',
+  'Usage: mocakit generate [--config <path>] [--out <path>] [--from-snapshot <path>] [--env-file <path> | --no-env-file] [--schema | --no-schema] [--dry-run] [--verbose]',
   '',
   '  --config         Config file (default: mocakit.config.{ts,mts,mjs,js,json} in the current directory)',
   '  --out            Output file (default: config.out or src/moca.generated.ts)',
   '  --from-snapshot  Generate from a saved moca.commands.json without contacting the server',
   '  --env-file       Load environment variables from this file (default: ./.env in the current directory, if present)',
   '  --no-env-file    Do not load ./.env automatically',
-  '  --dry-run        Introspect and report without writing files',
+  '  --schema         Also introspect database tables/views (writes moca.schema.json, moca.schema.ts and moca-schema/)',
+  '  --no-schema      Skip schema introspection even if the config enables it',
+  '  --dry-run       Introspect and report without writing files',
   '  --verbose        Print every warning (by default only the first 50 are printed) and the names of loaded env variables',
   '',
   'Credentials come from the config or MOCA_URL, MOCA_USER, MOCA_PASSWORD (and MOCA_IGNORE_SSL=1|yes|true).',
@@ -52,6 +54,8 @@ export async function runCli(
     'from-snapshot'?: string;
     'env-file'?: string;
     'no-env-file'?: boolean;
+    schema?: boolean;
+    'no-schema'?: boolean;
     'dry-run'?: boolean;
     verbose?: boolean;
   };
@@ -64,6 +68,8 @@ export async function runCli(
         'from-snapshot': { type: 'string' },
         'env-file': { type: 'string' },
         'no-env-file': { type: 'boolean' },
+        schema: { type: 'boolean' },
+        'no-schema': { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         verbose: { type: 'boolean' },
       },
@@ -77,6 +83,10 @@ export async function runCli(
   }
   if (values['env-file'] !== undefined && values['no-env-file']) {
     io.error('mocakit: --env-file and --no-env-file cannot be used together');
+    return 1;
+  }
+  if (values.schema && values['no-schema']) {
+    io.error('mocakit: --schema and --no-schema cannot be used together');
     return 1;
   }
   const verbose = values.verbose ?? false;
@@ -105,6 +115,7 @@ export async function runCli(
       configPath: values.config,
       out: values.out,
       fromSnapshot: values['from-snapshot'],
+      schema: values.schema ? true : values['no-schema'] ? false : undefined,
       dryRun: values['dry-run'] ?? false,
       verbose,
       cwd,
