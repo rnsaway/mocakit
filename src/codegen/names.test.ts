@@ -68,6 +68,10 @@ describe('assignMethodNames', () => {
 });
 
 describe('RESERVED_MEMBERS', () => {
+  it('reserves from for the query helper', () => {
+    expect(toMethodBase('from')).toBe('cmdFrom');
+  });
+
   it('covers every own property name of MocaClient.prototype', () => {
     for (const name of Object.getOwnPropertyNames(MocaClient.prototype)) {
       expect(RESERVED_MEMBERS.has(name)).toBe(true);

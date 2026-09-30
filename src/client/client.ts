@@ -20,6 +20,7 @@ import type {
 import { redactUrl } from '../util/url.js';
 import { batchBuilder, isBatchStep, type BatchBuilder, type BatchStep } from './commands.js';
 import { quoteMocaString, renderCommand } from './render.js';
+import { createQuery, type Query } from './query.js';
 
 export const MOCA_STATUS = Object.freeze({ OK: 0, NO_ROWS: 510, SESSION_EXPIRED: 523 } as const);
 
@@ -223,6 +224,16 @@ export class MocaClient {
       throw error;
     }
     return this.#execute(command, allArgs, opts);
+  }
+
+  /**
+   * Single-table select: `moca.from('ord').select('ordnum').where({ wh_id: 'W1' }).orderBy('ordnum').rows()`.
+   * Values in `where` are bound as MOCA variables, never written into the SQL. Generated clients with
+   * schema output narrow `table` to known tables and type the rows. Deliberately not generic: a generic
+   * base signature makes the generated override fail TypeScript's class-compatibility check.
+   */
+  from(table: string): Query<MocaRow> {
+    return createQuery<MocaRow>((text, opts) => this.exec(text, opts), defaultDateCodec, table);
   }
 
   /**

@@ -271,4 +271,17 @@ describe('runCli .env loading', () => {
     expect(out.join('\n')).toMatch(/--env-file <path>/);
     expect(out.join('\n')).toMatch(/--no-env-file/);
   });
+
+  it('rejects --schema together with --no-schema', async () => {
+    const { io, err } = capture();
+    expect(await runCli(['generate', '--schema', '--no-schema'], io, await tempDir())).toBe(1);
+    expect(err).toContain('mocakit: --schema and --no-schema cannot be used together');
+  });
+
+  it('documents --schema and --no-schema in the usage text', async () => {
+    const { io, out } = capture();
+    await runCli(['--help'], io);
+    expect(out.join('\n')).toContain('--schema');
+    expect(out.join('\n')).toContain('--no-schema');
+  });
 });

@@ -1,8 +1,13 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { MocaClient, type MocaClientDeps } from '../client/client.js';
+import type { MocakitConfig, SchemaConfig } from '../define-config.js';
 import { emit } from '../codegen/emit.js';
+import { emitSchema, filterTables, type SchemaFilter } from '../codegen/emit-schema.js';
+import { checkSchemaDocsTargets, emitSchemaDocs, writeSchemaDocs } from '../codegen/emit-schema-docs.js';
+import { introspectSchema } from '../codegen/introspect-schema.js';
+import { readSchemaSnapshot, sameSchema, writeSchemaSnapshot, type SchemaSnapshot } from '../codegen/schema-snapshot.js';
 import { filterCommands } from '../codegen/filter.js';
 import { introspect } from '../codegen/introspect.js';
 import { readSnapshot, writeSnapshot, type Snapshot } from '../codegen/snapshot.js';
@@ -19,6 +24,8 @@ export interface GenerateOptions {
   configPath?: string;
   out?: string;
   fromSnapshot?: string;
+  /** `true` = --schema, `false` = --no-schema, `undefined` = the config decides. */
+  schema?: boolean;
   dryRun: boolean;
   /** Print every warning instead of the first `MAX_PRINTED_WARNINGS` and a count. */
   verbose?: boolean;
@@ -64,6 +71,54 @@ function errorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export interface ResolvedSchema {
+  snapshot: string;
+  out: string;
+  /** `null` when docs are disabled. */
+  docs: string | null;
+  filter: SchemaFilter;
+}
+
+/** Schema settings from config + CLI flag, or `null` when schema introspection is off. */
+export function resolveSchemaSettings(
+  config: MocakitConfig,
+  flag: boolean | undefined,
+  configDir: string,
+  out: string,
+): ResolvedSchema | null {
+  const setting = config.schema;
+  if (setting !== undefined && typeof setting !== 'boolean' && (typeof setting !== 'object' || setting === null || Array.isArray(setting))) {
+    throw new Error('config.schema must be true, false or an object');
+  }
+  if (flag === false || (flag === undefined && !setting)) return null;
+  const options: SchemaConfig = typeof setting === 'object' ? setting : {};
+  const near = (file: string) => resolve(dirname(out), file);
+  const fromConfig = (path: string) => resolve(configDir, path);
+  return {
+    snapshot: options.snapshot !== undefined ? fromConfig(options.snapshot) : near('moca.schema.json'),
+    out: options.out !== undefined ? fromConfig(options.out) : near('moca.schema.ts'),
+    docs: options.docs === false ? null : options.docs !== undefined ? fromConfig(options.docs) : near('moca-schema'),
+    filter: { include: options.include, exclude: options.exclude, views: options.views },
+  };
+}
+
+/** NodeNext import specifier from one generated file to another (`.ts` → `.js`). */
+export function moduleSpecifier(fromFile: string, toFile: string): string {
+  const path = relative(dirname(fromFile), toFile).split(sep).join('/').replace(/\.(m?)ts$/, '.$1js');
+  return path.startsWith('.') ? path : `./${path}`;
+}
+
+async function readSchemaFile(path: string): Promise<SchemaSnapshot> {
+  try {
+    return await readSchemaSnapshot(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+      throw new Error(`Schema is enabled but ${path} does not exist; run generate against a server first, or pass --no-schema`);
+    }
+    throw error;
+  }
+}
+
 export async function runGenerate(options: GenerateOptions): Promise<void> {
   const { cwd, io, env } = options;
   const warn = warningPrinter(io, options.verbose ? Number.POSITIVE_INFINITY : MAX_PRINTED_WARNINGS);
@@ -79,17 +134,28 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   const out = options.out !== undefined ? resolve(cwd, options.out) : resolve(configDir, config.out ?? DEFAULT_OUT);
   const snapshotPath =
     config.snapshot !== undefined ? resolve(configDir, config.snapshot) : resolve(dirname(out), 'moca.commands.json');
+  const schema = resolveSchemaSettings(config, options.schema, configDir, out);
 
   if (!options.dryRun) {
-    // Fail fast, before contacting the server, if the output directory can't be created.
+    // Fail fast, before contacting the server, if an output directory can't be created.
     try {
       await mkdir(dirname(out), { recursive: true });
     } catch (error) {
       throw new Error(`Cannot write ${out}: ${errorDetail(error)}`);
     }
+    if (schema !== null) {
+      for (const dir of [dirname(schema.snapshot), dirname(schema.out), ...(schema.docs === null ? [] : [schema.docs])]) {
+        try {
+          await mkdir(dir, { recursive: true });
+        } catch (error) {
+          throw new Error(`Cannot write ${dir}: ${errorDetail(error)}`);
+        }
+      }
+    }
   }
 
   let snapshot: Snapshot;
+  let schemaSnapshot: SchemaSnapshot | null = null;
   if (options.fromSnapshot !== undefined) {
     const snapshotFile = resolve(cwd, options.fromSnapshot);
     try {
@@ -103,21 +169,54 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       if (typeof code !== 'string' && message.includes(snapshotFile)) throw new Error(message);
       throw new Error(`Cannot read snapshot ${snapshotFile}: ${errorDetail(error)}`);
     }
+    if (schema !== null) schemaSnapshot = await readSchemaFile(schema.snapshot);
   } else {
     const connection = resolveConnection(config, env);
     io.log(`Introspecting ${redactUrl(connection.url)} …`);
     const client = new MocaClient({ ...connection, session: { reuse: false } }, options.deps);
     let introspected: Awaited<ReturnType<typeof introspect>>;
+    let schemaResult: Awaited<ReturnType<typeof introspectSchema>> | null = null;
     try {
       introspected = await introspect(client, { version: VERSION, server: connection.url });
+      if (schema !== null) schemaResult = await introspectSchema(client, { version: VERSION, server: connection.url });
     } finally {
       await client.logout().catch(() => undefined);
     }
     snapshot = introspected.snapshot;
     warn.print(introspected.warnings);
+    if (schemaResult !== null) {
+      schemaSnapshot = schemaResult.snapshot;
+      warn.print(schemaResult.warnings);
+    }
+  }
 
-    // Leave an existing snapshot byte-for-byte alone when the server's commands haven't changed,
-    // so regenerating doesn't churn `generatedAt` (and the diff) for nothing.
+  const commands = filterCommands(snapshot.commands, config);
+  const schemaImport = schema !== null && schemaSnapshot !== null ? moduleSpecifier(out, schema.out) : undefined;
+  const { code, warnings, count } = emit({ ...snapshot, commands }, { version: VERSION, schemaImport });
+  warn.print(warnings);
+
+  let schemaOutput: { code: string; count: number; docs: Map<string, string> | null } | null = null;
+  if (schema !== null && schemaSnapshot !== null) {
+    const filtered = { ...schemaSnapshot, tables: filterTables(schemaSnapshot.tables, schema.filter) };
+    const emitted = emitSchema(filtered, { version: VERSION });
+    warn.print(emitted.warnings);
+    let docs: Map<string, string> | null = null;
+    if (schema.docs !== null) {
+      const docResult = emitSchemaDocs(filtered, { version: VERSION });
+      warn.print(docResult.warnings);
+      docs = docResult.files;
+    }
+    schemaOutput = { code: emitted.code, count: emitted.count, docs };
+  }
+  warn.finish();
+
+  if (!options.dryRun && schema !== null && schema.docs !== null && schemaOutput?.docs) {
+    await checkSchemaDocsTargets(schema.docs, schemaOutput.docs);
+  }
+
+  if (options.fromSnapshot === undefined) {
+    // Everything was read; only now write. Leave an existing snapshot byte-for-byte alone when
+    // nothing changed, so regenerating doesn't churn `generatedAt` (and the diff) for nothing.
     const existing = await readSnapshot(snapshotPath).catch(() => null);
     if (existing !== null && isDeepStrictEqual(existing.commands, snapshot.commands)) {
       if (!options.dryRun) io.log(`Snapshot unchanged: ${snapshotPath}`);
@@ -129,13 +228,23 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       }
       io.log(`Wrote snapshot of ${snapshot.commands.length} commands to ${snapshotPath}`);
     }
+    if (schema !== null && schemaSnapshot !== null) {
+      const existingSchema = await readSchemaSnapshot(schema.snapshot).catch(() => null);
+      const columns = schemaSnapshot.tables.reduce((n, t) => n + t.columns.length, 0);
+      if (existingSchema !== null && sameSchema(existingSchema, schemaSnapshot)) {
+        if (!options.dryRun) io.log(`Schema snapshot unchanged: ${schema.snapshot}`);
+      } else if (!options.dryRun) {
+        try {
+          await writeSchemaSnapshot(schema.snapshot, schemaSnapshot);
+        } catch (error) {
+          throw new Error(`Cannot write ${schema.snapshot}: ${errorDetail(error)}`);
+        }
+        io.log(`Wrote schema snapshot of ${schemaSnapshot.tables.length} tables (${columns} columns) to ${schema.snapshot}`);
+      }
+    }
   }
 
-  const commands = filterCommands(snapshot.commands, config);
-  const { code, warnings, count } = emit({ ...snapshot, commands }, { version: VERSION });
-  warn.print(warnings);
-  warn.finish();
-
+  const verb = options.dryRun ? 'Would write' : 'Wrote';
   if (!options.dryRun) {
     try {
       await writeFile(out, code, 'utf8');
@@ -143,5 +252,23 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       throw new Error(`Cannot write ${out}: ${errorDetail(error)}`);
     }
   }
-  io.log(`${options.dryRun ? 'Would write' : 'Wrote'} ${count} commands to ${out}`);
+  io.log(`${verb} ${count} commands to ${out}`);
+
+  if (schema !== null && schemaOutput !== null) {
+    if (!options.dryRun) {
+      try {
+        await writeFile(schema.out, schemaOutput.code, 'utf8');
+      } catch (error) {
+        throw new Error(`Cannot write ${schema.out}: ${errorDetail(error)}`);
+      }
+    }
+    io.log(`${verb} ${schemaOutput.count} tables to ${schema.out}`);
+    if (schema.docs !== null && schemaOutput.docs !== null) {
+      if (!options.dryRun) {
+        const result = await writeSchemaDocs(schema.docs, schemaOutput.docs);
+        if (result.removed.length > 0) io.log(`Removed ${result.removed.length} stale table docs from ${schema.docs}`);
+      }
+      io.log(`${verb} ${schemaOutput.count} table docs to ${schema.docs}`);
+    }
+  }
 }

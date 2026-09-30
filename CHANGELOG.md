@@ -4,6 +4,25 @@ All notable changes to mocakit are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/) (while below 1.0.0, a minor version can contain breaking changes).
 
+## [0.3.0] - 2026-09-30
+
+### Added
+
+- **Opt-in schema introspection** in `mocakit generate` (`schema` in the config, or `--schema`): reads the MOCA login
+  schema's tables, views, columns, comments and primary keys from SQL Server or Oracle into `moca.schema.json`.
+- **`moca.schema.ts`**: a `MocaTables` interface with every table's columns, typed and documented for hover.
+- **Agent docs** (`moca-schema/`): `README.md`, `INDEX.md` and `tables/<table>.md` for coding agents; stale generated
+  files are removed. Hand-written files are never overwritten or deleted: if one is in the way, `generate` refuses to
+  run before writing anything.
+- **`moca.from(table)`**: a typed single-table query helper (`select`, equality `where`, `orderBy`, `rows`) with values
+  bound as MOCA variables. `null` in `where` means `is null`; a `Date` value is sent through `to_date`. `rows()`
+  always converts values and has no `convert` option.
+- `--no-schema` to skip schema introspection when the config enables it.
+
+### Changed
+
+- `from` is now a reserved method name: a MOCA command named `from` is generated as `cmdFrom`.
+
 ## [0.2.0] - 2026-09-25
 
 ### Breaking
@@ -60,5 +79,6 @@ All notable changes to mocakit are documented here. The format follows
   `MocaArgumentError`) with password redaction, a `MocaOutputs` registry for row types, and date helpers
   (`formatMocaDate`, `parseMocaDate`).
 
+[0.3.0]: https://github.com/rnsaway/mocakit/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rnsaway/mocakit/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rnsaway/mocakit/releases/tag/v0.1.0

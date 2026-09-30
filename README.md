@@ -339,6 +339,107 @@ generic is wrapped in `NoInfer`, so it can **only be set explicitly this way** â
 annotation on the result (`const rows: MyOrder[] = await moca.listOrders(...)` still returns the registered/default
 type). These are type-only assertions; nothing checks them at runtime.
 
+## Schema types, agent docs & moca.from()
+
+`mocakit generate` can also read your WMS database's tables, views and columns (SQL Server or Oracle) and produce
+typed table definitions, agent-readable docs and a small typed query helper. It is opt-in: nothing changes until you
+enable it.
+
+### Enabling it
+
+```ts
+// mocakit.config.ts
+import { defineConfig } from 'mocakit';
+
+export default defineConfig({
+  out: 'src/moca.generated.ts',
+  schema: true, // or an object with any of these options (defaults shown):
+  // schema: {
+  //   include: ['*'],                 // table/view name globs, case-insensitive
+  //   exclude: [],                    // e.g. ['*_bak', 'tmp_*']
+  //   views: true,                    // include views
+  //   snapshot: 'src/moca.schema.json', // default: moca.schema.json next to `out`
+  //   out: 'src/moca.schema.ts',        // default: moca.schema.ts next to `out`
+  //   docs: 'src/moca-schema',          // default: moca-schema next to `out`; false = don't write agent docs
+  // },
+  // Relative paths you set here resolve against this config file's directory.
+});
+```
+
+`mocakit generate --schema` enables it for one run; `--no-schema` disables it for one run even if the config enables it.
+`--dry-run` reports counts and writes nothing. `--from-snapshot <moca.commands.json>` also reads the committed
+`moca.schema.json` from its configured location; no server is contacted.
+
+### Outputs
+
+- `moca.schema.json`: the raw snapshot (always unfiltered; left untouched when nothing changed).
+- `moca.schema.ts`: a `MocaTables` interface with every table's columns, typed and documented for editor hover.
+- `moca-schema/`: `README.md`, `INDEX.md` and `tables/<table>.md` for coding agents. Stale generated files are
+  removed, and files you wrote by hand are never overwritten or deleted: if a file that mocakit would write already
+  exists in that folder without mocakit's generated marker, `generate` refuses to run (before writing anything)
+  and asks you to move it or choose another `schema.docs` directory.
+
+Commit all three. Table and column comments from your database are written into these files, so they end up in your
+repository. A full WMS schema is large (roughly 1,200 tables and 17,500 columns): `moca.schema.json` is about 5 MB,
+`moca.schema.ts` about 2 MB. Use `include`/`exclude` to shrink the typed output.
+
+### moca.from()
+
+```ts
+const rows = await moca.from('widget')
+  .select('widget_id', 'qty')          // optional; omitted means every column
+  .where({ wh_id: 'WMD1', status: 'A', ship_id: null })
+  .orderBy('widget_id', 'desc')        // repeatable; direction defaults to 'asc'
+  .rows();
+// rows: { widget_id: string; qty: number | null }[]
+```
+
+This sends:
+
+```
+publish data where wh_id = 'WMD1' and status = 'A'
+| [select widget_id, qty from widget where wh_id = @wh_id and status = @status and ship_id is null order by widget_id desc]
+```
+
+A date column is filtered with a `Date`, e.g. `.where({ moddte: new Date(2026, 8, 30) })`.
+
+Values are bound as MOCA variables and never appear in the SQL text. Table and column names are checked at runtime
+and must be lowercase identifiers.
+
+Rules worth knowing:
+
+- **`null` means `is null`.** In `where`, `null` becomes `col is null` and `undefined` omits the key. This differs
+  from command arguments, where `null` is omitted.
+- `where` columns become MOCA variable names, so they may contain only letters, digits and `_`. A column with `$` or
+  `#` in its name can be selected and ordered by, but filtering on it throws; use `exec` for that.
+- **Filter date columns with a `Date`.** A `Date` is sent through `to_date(@col, 'YYYYMMDDHH24MISS')`. A
+  `YYYYMMDDHH24MISS` string is sent as a plain string and may fail on SQL Server.
+- A `where` on a date column is an exact match to the second. For columns that store fractional seconds, or for
+  ranges (before, after, between), use `moca.exec("[select ... where col >= to_date(@from, 'YYYYMMDDHH24MISS')]", ...)`
+  style SQL instead.
+- No rows (status 510) returns `[]`.
+- **`rows()` always converts values** according to the column metadata; there is no `convert` option (passing one
+  throws). Integers beyond 2^53 (for example large `bigint` values) arrive as strings at runtime even though the
+  column is typed `number`.
+
+`from()` deliberately does not do joins, `or`, operators other than `=` and `is null`, aggregates, `limit`, or use
+inside `batch`. Use `moca.exec()` with SQL for those. `from` is a reserved method name: a MOCA command named `from`
+is generated as `cmdFrom`.
+
+### Type mapping
+
+| Database type | TypeScript |
+|---|---|
+| char, varchar, varchar2, nchar, nvarchar, nvarchar2, text, ntext, sysname, clob, nclob, long, rowid, urowid, uniqueidentifier, xml | `string` |
+| tinyint, smallint, int, bigint, integer; Oracle `number` with scale 0 | `number` |
+| numeric, decimal, float, real, money, smallmoney; Oracle `number`, `float`, `binary_float`, `binary_double` | `number` |
+| date, datetime, datetime2, smalldatetime, datetimeoffset, time; Oracle `date`, `timestamp` | `string` (`YYYYMMDDHH24MISS`) |
+| binary, varbinary, image, timestamp/rowversion (SQL Server), blob, raw, long raw | `string` |
+| bit | `boolean` |
+| anything else | `MocaValue` |
+
+Nullable columns add `| null`. Names are lowercased to match MOCA's row keys.
+
 ## Response format
 
 With the default `format: 'rows'`, a call resolves to `T[]`, one plain object per row, with keys exactly as MOCA
