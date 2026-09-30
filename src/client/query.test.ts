@@ -30,7 +30,7 @@ describe('renderQuery', () => {
 
   it('renders dates in MOCA format', () => {
     const text = renderQuery(state({ filter: [['moddte', new Date(2026, 8, 30, 13, 5, 9)]] }), defaultDateCodec);
-    expect(text).toBe("publish data where moddte = '20260930130509' | [select * from widget where moddte = @moddte]");
+    expect(text).toBe("publish data where moddte = '20260930130509' | [select * from widget where moddte = to_date(@moddte, 'YYYYMMDDHH24MISS')]");
   });
 
   it('keeps hostile string values inside the quoted publish data value', () => {

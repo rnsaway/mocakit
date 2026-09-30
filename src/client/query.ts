@@ -11,6 +11,8 @@ export type QueryRowsOptions = Pick<CallOptions, 'format' | 'convert' | 'env' | 
  * Equality filter. `null` means `is null`; `undefined` leaves the column out. Untyped rows accept any
  * argument value; typed rows get each column's value type (`Date` is also accepted for string columns,
  * because date columns are strings in the schema model).
+ * Filter date columns with a `Date`: it is sent through `to_date(@col, 'YYYYMMDDHH24MISS')`. A
+ * YYYYMMDDHH24MISS string is sent as a plain string and may fail on SQL Server.
  */
 export type QueryFilter<Row> = string extends keyof Row
   ? Record<string, MocaArgValue>
@@ -60,7 +62,9 @@ export function renderQuery(state: QueryState, codec: DateCodec): string {
       continue;
     }
     published.push(`${column} = ${renderArgValue(column, value, codec)}`);
-    conditions.push(`${column} = @${column}`);
+    conditions.push(
+      value instanceof Date ? `${column} = to_date(@${column}, 'YYYYMMDDHH24MISS')` : `${column} = @${column}`,
+    );
   }
   let sql = `select ${state.columns.length > 0 ? state.columns.join(', ') : '*'} from ${state.table}`;
   if (conditions.length > 0) sql += ` where ${conditions.join(' and ')}`;
