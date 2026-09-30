@@ -1,0 +1,35 @@
+{
+  "mocakitVersion": "0.3.0",
+  "generatedAt": "2026-09-30T00:00:00.000Z",
+  "server": "https://moca.test/service",
+  "database": "sqlserver",
+  "tables": [
+    {
+      "name": "ord",
+      "kind": "table",
+      "comment": "Orders.",
+      "primaryKey": ["ordnum"],
+      "columns": [
+        { "name": "ordnum", "type": "nvarchar", "category": "string", "nullable": false, "length": 35 },
+        { "name": "wh_id", "type": "nvarchar", "category": "string", "nullable": false, "length": 32 }
+      ]
+    },
+    {
+      "name": "widget",
+      "kind": "table",
+      "primaryKey": ["widget_id"],
+      "columns": [
+        { "name": "widget_id", "type": "nvarchar", "category": "string", "nullable": false, "length": 20 },
+        { "name": "qty", "type": "numeric", "category": "decimal", "nullable": true, "precision": 19, "scale": 4 },
+        { "name": "moddte", "type": "datetime", "category": "date", "nullable": true },
+        { "name": "flag", "type": "bit", "category": "boolean", "nullable": false },
+        { "name": "geo", "type": "geography", "category": "other", "nullable": true }
+      ]
+    },
+    {
+      "name": "widget_view",
+      "kind": "view",
+      "columns": [{ "name": "widget_id", "type": "nvarchar", "category": "string", "nullable": false, "length": 20 }]
+    }
+  ]
+}

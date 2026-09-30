@@ -8,6 +8,8 @@ export interface EmitOptions {
   version: string;
   /** Module specifier for the runtime. Default `mocakit`; tests point it at `src/index.js`. */
   importFrom?: string;
+  /** Specifier of the generated `moca.schema.ts` (e.g. `./moca.schema.js`); types `from()` when set. */
+  schemaImport?: string;
 }
 
 export interface EmitResult {
@@ -251,6 +253,9 @@ export function emit(snapshot: Snapshot, options: EmitOptions): EmitResult {
     `import * as mk from ${str(options.importFrom ?? 'mocakit')};`,
     '',
   ];
+  if (options.schemaImport !== undefined) {
+    lines.splice(lines.length - 1, 0, `import type { MocaTableName, MocaTables } from ${str(options.schemaImport)};`);
+  }
 
   lines.push(
     commands.length === 0
@@ -278,6 +283,12 @@ export function emit(snapshot: Snapshot, options: EmitOptions): EmitResult {
   lines.push('export interface Moca extends mk.MocaClient {');
   for (const command of commands) {
     lines.push(...emitMember(names.get(command.name) as string, argTypes.get(command.name) as string, command));
+  }
+  if (options.schemaImport !== undefined) {
+    lines.push(
+      "  /** Typed single-table select: `moca.from('table').select(...).where({...}).rows()`. */",
+      '  from<T extends MocaTableName>(table: T): mk.Query<MocaTables[T]>;',
+    );
   }
   lines.push('}', '', 'export class Moca extends mk.MocaClient {}', 'mk.defineCommands(Moca.prototype, S);', '');
 
