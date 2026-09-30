@@ -6,6 +6,8 @@ export const RESERVED_MEMBERS = new Set<string>([
   'logout',
   'session',
   'batch',
+  // The query helper (moca.from()).
+  'from',
   // Not a client member, but the name of the batch builder's raw-step factory (`b.raw`).
   'raw',
   'constructor',

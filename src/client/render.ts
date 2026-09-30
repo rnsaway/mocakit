@@ -12,7 +12,7 @@ function checkName(name: string): string {
   return name;
 }
 
-function renderValue(name: string, value: unknown, codec: DateCodec): string {
+export function renderArgValue(name: string, value: unknown, codec: DateCodec): string {
   if (typeof value === 'string') return quoteMocaString(value);
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new MocaArgumentError(`Argument "${name}" must be a finite number`, name);
@@ -76,7 +76,7 @@ export function renderCommand(
       if (required) throw new MocaArgumentError(`Missing required argument "${name}" for "${command}"`, name);
       continue;
     }
-    clauses.push(`${checkName(name)} = ${renderValue(name, value, codec)}`);
+    clauses.push(`${checkName(name)} = ${renderArgValue(name, value, codec)}`);
   }
 
   const seenExtra = new Set<string>();
@@ -90,7 +90,7 @@ export function renderCommand(
     }
     seenExtra.add(lower);
     if (isAbsent(value)) continue;
-    clauses.push(`${checkName(name)} = ${renderValue(name, value, codec)}`);
+    clauses.push(`${checkName(name)} = ${renderArgValue(name, value, codec)}`);
   }
 
   return clauses.length === 0 ? command : `${command} where ${clauses.join(' and ')}`;
