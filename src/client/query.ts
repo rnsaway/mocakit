@@ -123,7 +123,7 @@ class QueryBuilder {
   orderBy(column: string, direction: Direction = 'asc'): QueryBuilder {
     sqlName('Column', column);
     if (direction !== 'asc' && direction !== 'desc') {
-      throw new MocaArgumentError(`orderBy direction must be 'asc' or 'desc', not ${JSON.stringify(direction)}`, column);
+      throw new MocaArgumentError(`orderBy direction must be one of asc, desc; got ${JSON.stringify(direction)}`, column);
     }
     if (this.#state.order.some(([c]) => c === column)) {
       throw new MocaArgumentError(`Column "${column}" appears twice in orderBy()`, column);
