@@ -358,23 +358,26 @@ export default defineConfig({
   //   include: ['*'],                 // table/view name globs, case-insensitive
   //   exclude: [],                    // e.g. ['*_bak', 'tmp_*']
   //   views: true,                    // include views
-  //   snapshot: 'moca.schema.json',   // next to `out`
-  //   out: 'moca.schema.ts',          // next to `out`
-  //   docs: 'moca-schema',            // next to `out`; false = don't write agent docs
+  //   snapshot: 'src/moca.schema.json', // default: moca.schema.json next to `out`
+  //   out: 'src/moca.schema.ts',        // default: moca.schema.ts next to `out`
+  //   docs: 'src/moca-schema',          // default: moca-schema next to `out`; false = don't write agent docs
   // },
+  // Relative paths you set here resolve against this config file's directory.
 });
 ```
 
 `mocakit generate --schema` enables it for one run; `--no-schema` disables it for one run even if the config enables it.
-`--dry-run` reports counts and writes nothing, and `--from-snapshot` regenerates from the committed
-`moca.schema.json` without contacting the server.
+`--dry-run` reports counts and writes nothing. `--from-snapshot <moca.commands.json>` also reads the committed
+`moca.schema.json` from its configured location; no server is contacted.
 
 ### Outputs
 
 - `moca.schema.json`: the raw snapshot (always unfiltered; left untouched when nothing changed).
 - `moca.schema.ts`: a `MocaTables` interface with every table's columns, typed and documented for editor hover.
 - `moca-schema/`: `README.md`, `INDEX.md` and `tables/<table>.md` for coding agents. Stale generated files are
-  removed; files you wrote by hand are never touched.
+  removed, and files you wrote by hand are never overwritten or deleted: if a file that mocakit would write already
+  exists in that folder without mocakit's generated marker, `generate` refuses to run (before writing anything)
+  and asks you to move it or choose another `schema.docs` directory.
 
 Commit all three. Table and column comments from your database are written into these files, so they end up in your
 repository. A full WMS schema is large (roughly 1,200 tables and 17,500 columns): `moca.schema.json` is about 5 MB,
@@ -398,6 +401,8 @@ publish data where wh_id = 'WMD1' and status = 'A'
 | [select widget_id, qty from widget where wh_id = @wh_id and status = @status and ship_id is null order by widget_id desc]
 ```
 
+A date column is filtered with a `Date`, e.g. `.where({ moddte: new Date(2026, 8, 30) })`.
+
 Values are bound as MOCA variables and never appear in the SQL text. Table and column names are checked at runtime
 and must be lowercase identifiers.
 
@@ -413,6 +418,9 @@ Rules worth knowing:
   ranges (before, after, between), use `moca.exec("[select ... where col >= to_date(@from, 'YYYYMMDDHH24MISS')]", ...)`
   style SQL instead.
 - No rows (status 510) returns `[]`.
+- **`rows()` always converts values** according to the column metadata; there is no `convert` option (passing one
+  throws). Integers beyond 2^53 (for example large `bigint` values) arrive as strings at runtime even though the
+  column is typed `number`.
 
 `from()` deliberately does not do joins, `or`, operators other than `=` and `is null`, aggregates, `limit`, or use
 inside `batch`. Use `moca.exec()` with SQL for those. `from` is a reserved method name: a MOCA command named `from`
@@ -422,11 +430,11 @@ is generated as `cmdFrom`.
 
 | Database type | TypeScript |
 |---|---|
-| char, varchar, nvarchar, text, clob, uniqueidentifier, xml | `string` |
-| tinyint, smallint, int, bigint; Oracle `number` with scale 0 | `number` |
-| numeric, decimal, float, real, money; Oracle `number` with scale | `number` |
-| date, datetime, datetime2, timestamp (Oracle) and similar | `string` (`YYYYMMDDHH24MISS`) |
-| binary, varbinary, image, blob, raw | `string` |
+| char, varchar, varchar2, nchar, nvarchar, nvarchar2, text, ntext, sysname, clob, nclob, long, rowid, urowid, uniqueidentifier, xml | `string` |
+| tinyint, smallint, int, bigint, integer; Oracle `number` with scale 0 | `number` |
+| numeric, decimal, float, real, money, smallmoney; Oracle `number`, `float`, `binary_float`, `binary_double` | `number` |
+| date, datetime, datetime2, smalldatetime, datetimeoffset, time; Oracle `date`, `timestamp` | `string` (`YYYYMMDDHH24MISS`) |
+| binary, varbinary, image, timestamp/rowversion (SQL Server), blob, raw, long raw | `string` |
 | bit | `boolean` |
 | anything else | `MocaValue` |
 

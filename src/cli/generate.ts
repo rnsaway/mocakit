@@ -5,7 +5,7 @@ import { MocaClient, type MocaClientDeps } from '../client/client.js';
 import type { MocakitConfig, SchemaConfig } from '../define-config.js';
 import { emit } from '../codegen/emit.js';
 import { emitSchema, filterTables, type SchemaFilter } from '../codegen/emit-schema.js';
-import { emitSchemaDocs, writeSchemaDocs } from '../codegen/emit-schema-docs.js';
+import { checkSchemaDocsTargets, emitSchemaDocs, writeSchemaDocs } from '../codegen/emit-schema-docs.js';
 import { introspectSchema } from '../codegen/introspect-schema.js';
 import { readSchemaSnapshot, sameSchema, writeSchemaSnapshot, type SchemaSnapshot } from '../codegen/schema-snapshot.js';
 import { filterCommands } from '../codegen/filter.js';
@@ -188,7 +188,33 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       schemaSnapshot = schemaResult.snapshot;
       warn.print(schemaResult.warnings);
     }
+  }
 
+  const commands = filterCommands(snapshot.commands, config);
+  const schemaImport = schema !== null && schemaSnapshot !== null ? moduleSpecifier(out, schema.out) : undefined;
+  const { code, warnings, count } = emit({ ...snapshot, commands }, { version: VERSION, schemaImport });
+  warn.print(warnings);
+
+  let schemaOutput: { code: string; count: number; docs: Map<string, string> | null } | null = null;
+  if (schema !== null && schemaSnapshot !== null) {
+    const filtered = { ...schemaSnapshot, tables: filterTables(schemaSnapshot.tables, schema.filter) };
+    const emitted = emitSchema(filtered, { version: VERSION });
+    warn.print(emitted.warnings);
+    let docs: Map<string, string> | null = null;
+    if (schema.docs !== null) {
+      const docResult = emitSchemaDocs(filtered, { version: VERSION });
+      warn.print(docResult.warnings);
+      docs = docResult.files;
+    }
+    schemaOutput = { code: emitted.code, count: emitted.count, docs };
+  }
+  warn.finish();
+
+  if (!options.dryRun && schema !== null && schema.docs !== null && schemaOutput?.docs) {
+    await checkSchemaDocsTargets(schema.docs, schemaOutput.docs);
+  }
+
+  if (options.fromSnapshot === undefined) {
     // Everything was read; only now write. Leave an existing snapshot byte-for-byte alone when
     // nothing changed, so regenerating doesn't churn `generatedAt` (and the diff) for nothing.
     const existing = await readSnapshot(snapshotPath).catch(() => null);
@@ -217,26 +243,6 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       }
     }
   }
-
-  const commands = filterCommands(snapshot.commands, config);
-  const schemaImport = schema !== null && schemaSnapshot !== null ? moduleSpecifier(out, schema.out) : undefined;
-  const { code, warnings, count } = emit({ ...snapshot, commands }, { version: VERSION, schemaImport });
-  warn.print(warnings);
-
-  let schemaOutput: { code: string; count: number; docs: Map<string, string> | null } | null = null;
-  if (schema !== null && schemaSnapshot !== null) {
-    const filtered = { ...schemaSnapshot, tables: filterTables(schemaSnapshot.tables, schema.filter) };
-    const emitted = emitSchema(filtered, { version: VERSION });
-    warn.print(emitted.warnings);
-    let docs: Map<string, string> | null = null;
-    if (schema.docs !== null) {
-      const docResult = emitSchemaDocs(filtered, { version: VERSION });
-      warn.print(docResult.warnings);
-      docs = docResult.files;
-    }
-    schemaOutput = { code: emitted.code, count: emitted.count, docs };
-  }
-  warn.finish();
 
   const verb = options.dryRun ? 'Would write' : 'Wrote';
   if (!options.dryRun) {

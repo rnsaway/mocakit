@@ -46,6 +46,7 @@ describe('catalog SQL', () => {
 
   it('scopes SQL Server to user objects in the login schema', () => {
     expect(SQLSERVER_COLUMNS).toContain('o.is_ms_shipped = 0');
+    expect(SQLSERVER_COLUMNS).toContain('t.user_type_id = c.system_type_id');
     expect(SQLSERVER_COLUMNS).toContain('o.schema_id = schema_id()');
     expect(SQLSERVER_COLUMNS.match(/class = 1/g)).toHaveLength(2);
     expect(SQLSERVER_COLUMNS).toContain('cast(tp.value as nvarchar(4000))');

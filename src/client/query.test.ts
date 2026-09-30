@@ -78,7 +78,7 @@ describe('MocaClient.from', () => {
     expect(build).toThrow(MocaArgumentError);
   });
 
-  it.each(['dryRun', 'extraArgs', 'noRowsIsError'])('rejects the %s option on rows()', async (option) => {
+  it.each(['dryRun', 'extraArgs', 'noRowsIsError', 'convert'])('rejects the %s option on rows()', async (option) => {
     const { moca, requests } = client();
     await expect(moca.from('widget').rows({ [option]: true } as never)).rejects.toThrow(`${option} is not supported by from().rows()`);
     expect(requests).toEqual([]);

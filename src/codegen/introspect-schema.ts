@@ -21,7 +21,7 @@ export const SQLSERVER_COLUMNS = `[select o.name table_name,
         cast(cp.value as nvarchar(4000)) column_comment
    from sys.objects o
    join sys.columns c on c.object_id = o.object_id
-   join sys.types t on t.user_type_id = c.user_type_id
+   join sys.types t on t.user_type_id = c.system_type_id
    left join sys.extended_properties tp
      on tp.class = 1 and tp.major_id = o.object_id and tp.minor_id = 0 and tp.name = 'MS_Description'
    left join sys.extended_properties cp

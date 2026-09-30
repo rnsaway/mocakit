@@ -5,7 +5,7 @@ import { isMocaArgName } from '../util/text.js';
 import { renderArgValue } from './render.js';
 
 /** Options accepted by `from(...).rows()`: a select has nothing to roll back and no command arguments. */
-export type QueryRowsOptions = Pick<CallOptions, 'format' | 'convert' | 'env' | 'signal'>;
+export type QueryRowsOptions = Pick<CallOptions, 'format' | 'env' | 'signal'>;
 
 /**
  * Equality filter. `null` means `is null`; `undefined` leaves the column out. Untyped rows accept any
@@ -72,7 +72,7 @@ export function renderQuery(state: QueryState, codec: DateCodec): string {
   return published.length > 0 ? `publish data where ${published.join(' and ')} | [${sql}]` : `[${sql}]`;
 }
 
-const REJECTED_OPTIONS = ['dryRun', 'extraArgs', 'noRowsIsError'] as const;
+const REJECTED_OPTIONS = ['dryRun', 'extraArgs', 'noRowsIsError', 'convert'] as const;
 
 type Run = (text: string, opts: CallOptions) => Promise<unknown>;
 

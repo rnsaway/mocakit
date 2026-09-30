@@ -12,9 +12,11 @@ All notable changes to mocakit are documented here. The format follows
   schema's tables, views, columns, comments and primary keys from SQL Server or Oracle into `moca.schema.json`.
 - **`moca.schema.ts`**: a `MocaTables` interface with every table's columns, typed and documented for hover.
 - **Agent docs** (`moca-schema/`): `README.md`, `INDEX.md` and `tables/<table>.md` for coding agents; stale generated
-  files are removed, hand-written ones are never touched.
+  files are removed. Hand-written files are never overwritten or deleted: if one is in the way, `generate` refuses to
+  run before writing anything.
 - **`moca.from(table)`**: a typed single-table query helper (`select`, equality `where`, `orderBy`, `rows`) with values
-  bound as MOCA variables. `null` in `where` means `is null`; a `Date` value is sent through `to_date`.
+  bound as MOCA variables. `null` in `where` means `is null`; a `Date` value is sent through `to_date`. `rows()`
+  always converts values and has no `convert` option.
 - `--no-schema` to skip schema introspection when the config enables it.
 
 ### Changed
