@@ -1,0 +1,91 @@
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { DOC_MARKER, docFileName, emitSchemaDocs, writeSchemaDocs } from './emit-schema-docs.js';
+import type { SchemaSnapshot } from './schema-snapshot.js';
+
+const snapshot: SchemaSnapshot = {
+  mocakitVersion: '0.3.0',
+  generatedAt: 'x',
+  server: 'https://u:p@moca.test/service',
+  database: 'sqlserver',
+  tables: [
+    {
+      name: 'widget',
+      kind: 'table',
+      comment: 'Widgets | on\nhand.',
+      primaryKey: ['widget_id'],
+      columns: [
+        { name: 'widget_id', type: 'nvarchar', category: 'string', nullable: false, length: 20, comment: 'Id | key' },
+        { name: 'qty', type: 'numeric', category: 'decimal', nullable: true, precision: 19, scale: 4 },
+      ],
+    },
+    { name: 'index', kind: 'view', columns: [{ name: 'a', type: 'int', category: 'integer', nullable: true }] },
+    { name: 'weird name', kind: 'table', columns: [{ name: 'a', type: 'int', category: 'integer', nullable: true }] },
+  ],
+};
+
+const dirs: string[] = [];
+async function temp() {
+  const dir = await mkdtemp(join(tmpdir(), 'mocakit-docs-'));
+  dirs.push(dir);
+  return dir;
+}
+afterEach(async () => {
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
+
+describe('docFileName', () => {
+  it('keeps safe names and percent-encodes the rest', () => {
+    expect(docFileName('pick$work#1')).toEqual({ file: 'pick$work#1.md', encoded: false });
+    expect(docFileName('weird name')).toEqual({ file: 'weird%20name.md', encoded: true });
+    expect(docFileName('é')).toEqual({ file: '%C3%A9.md', encoded: true });
+  });
+});
+
+describe('emitSchemaDocs', () => {
+  const { files, warnings } = emitSchemaDocs(snapshot, { version: '0.3.0' });
+
+  it('writes README, INDEX and one file per table under tables/', () => {
+    expect([...files.keys()]).toEqual(['README.md', 'INDEX.md', 'tables/widget.md', 'tables/index.md', 'tables/weird%20name.md']);
+    for (const content of files.values()) expect(content.startsWith(DOC_MARKER)).toBe(true);
+    expect(warnings).toEqual(['Table "weird name" has characters that are not safe in file names; its doc is tables/weird%20name.md']);
+  });
+
+  it('lists every table in INDEX.md with a link, kind, column count and one-line comment', () => {
+    const index = files.get('INDEX.md')!;
+    expect(index).toContain('- [`widget`](tables/widget.md) · table · 2 cols · Widgets | on hand.');
+    expect(index).toContain('- [`index`](tables/index.md) · view · 1 col');
+    expect(index).not.toContain('u:p@');
+  });
+
+  it('renders a table file with escaped markdown cells', () => {
+    const widget = files.get('tables/widget.md')!;
+    expect(widget).toContain('# widget\n\ntable · primary key: widget_id\n\nWidgets | on hand.\n');
+    expect(widget).toContain('| column | type | null | key | comment |\n|---|---|---|---|---|');
+    expect(widget).toContain('| widget_id | nvarchar(20) | no | PK | Id \\| key |');
+    expect(widget).toContain('| qty | numeric(19,4) | yes |  |  |');
+  });
+});
+
+describe('writeSchemaDocs', () => {
+  it('writes files, skips unchanged ones and removes only stale generated table docs', async () => {
+    const dir = await temp();
+    await mkdir(join(dir, 'tables'), { recursive: true });
+    await writeFile(join(dir, 'tables/dropped.md'), `${DOC_MARKER} 0.2.0 -->\n# dropped\n`);
+    await writeFile(join(dir, 'tables/notes.md'), '# my notes about widgets\n');
+    await writeFile(join(dir, 'tables/other.txt'), `${DOC_MARKER}\n`);
+
+    const { files } = emitSchemaDocs(snapshot, { version: '0.3.0' });
+    const first = await writeSchemaDocs(dir, files);
+    expect(first).toEqual({ written: 5, unchanged: 0, removed: ['dropped.md'] });
+    expect((await readdir(join(dir, 'tables'))).sort()).toEqual(['index.md', 'notes.md', 'other.txt', 'weird%20name.md', 'widget.md']);
+    expect(await readFile(join(dir, 'INDEX.md'), 'utf8')).toBe(files.get('INDEX.md'));
+
+    const before = (await stat(join(dir, 'tables/widget.md'))).mtimeMs;
+    const second = await writeSchemaDocs(dir, files);
+    expect(second).toEqual({ written: 0, unchanged: 5, removed: [] });
+    expect((await stat(join(dir, 'tables/widget.md'))).mtimeMs).toBe(before);
+  });
+});
