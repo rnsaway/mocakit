@@ -14,7 +14,7 @@ const USAGE = [
   '  --no-env-file    Do not load ./.env automatically',
   '  --schema         Also introspect database tables/views (writes moca.schema.json, moca.schema.ts and moca-schema/)',
   '  --no-schema      Skip schema introspection even if the config enables it',
-  '  --dry-run       Introspect and report without writing files',
+  '  --dry-run        Introspect and report without writing files',
   '  --verbose        Print every warning (by default only the first 50 are printed) and the names of loaded env variables',
   '',
   'Credentials come from the config or MOCA_URL, MOCA_USER, MOCA_PASSWORD (and MOCA_IGNORE_SSL=1|yes|true).',
