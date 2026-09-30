@@ -20,7 +20,7 @@ export interface EmitResult {
 const str = (value: string): string => JSON.stringify(value);
 
 /** Makes server text safe inside a JSDoc comment: no terminator, no tags, one line. */
-function doc(text: string): string {
+export function doc(text: string): string {
   return text
     .replace(/\*\//g, '*\\/')
     .replace(/(^|[^\w\\])@/g, '$1\\@')
@@ -43,7 +43,7 @@ function tsType(dtype: string): string {
   }
 }
 
-function propertyName(name: string): string {
+export function propertyName(name: string): string {
   return isIdentifier(name) && name !== '__proto__' ? name : str(name);
 }
 
