@@ -79,7 +79,7 @@ describe('writeSchemaDocs', () => {
 
     const { files } = emitSchemaDocs(snapshot, { version: '0.3.0' });
     const first = await writeSchemaDocs(dir, files);
-    expect(first).toEqual({ written: 5, unchanged: 0, removed: ['dropped.md'] });
+    expect(first).toEqual({ written: 5, unchanged: 0, removed: ['tables/dropped.md'] });
     expect((await readdir(join(dir, 'tables'))).sort()).toEqual(['index.md', 'notes.md', 'other.txt', 'weird%20name.md', 'widget.md']);
     expect(await readFile(join(dir, 'INDEX.md'), 'utf8')).toBe(files.get('INDEX.md'));
 
