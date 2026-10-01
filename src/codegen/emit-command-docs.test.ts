@@ -156,4 +156,11 @@ describe('emitCommandDocs', () => {
     expect(out).toContain('and 5 more');
     expect(out).toContain('- Reads: `widget`');
   });
+
+  it('shows tables without a doc as plain names', () => {
+    const both = model({ name: 'both', reads: ['widget', 'hidden'] });
+    const out = emitCommandDocs([both], { ...base, tableHref: (t) => (t === 'widget' ? `../../moca-schema/tables/${t}.md` : undefined) })
+      .files.get('commands/both.md')!;
+    expect(out).toContain('- Reads: [`widget`](../../moca-schema/tables/widget.md), `hidden`');
+  });
 });

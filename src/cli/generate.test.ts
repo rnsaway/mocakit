@@ -522,6 +522,16 @@ describe('runGenerate with command docs and codes', () => {
     expect(out).toContain(`Wrote 0 command docs to ${join(dir, 'src/moca-commands')}`);
   });
 
+  it('does not link command docs to tables the schema filter left out', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ schema: { exclude: ['widget'] } }));
+    await runGenerate({ schema: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    const doc = await readFile(join(dir, 'src/moca-commands/commands/list-orders.md'), 'utf8');
+    expect(doc).toContain('- Writes: `widget`');
+    expect(doc).not.toContain('moca-schema/tables/widget.md');
+    expect(await exists(join(dir, 'src/moca-schema/tables/widget.md'))).toBe(false);
+  });
+
   it('keeps the previous usage when a later run has command docs off', async () => {
     const dir = await tempDir();
     await runGenerate({ schema: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });

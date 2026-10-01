@@ -95,16 +95,22 @@ export function commandHrefFor(
       : undefined;
 }
 
-/** The moca-commands/ folder for `documented` (see `documentedCommands`). */
+/**
+ * The moca-commands/ folder for `documented` (see `documentedCommands`). Tables link to their docs only when
+ * schema docs are on and the table is in `documentedTables` (the schema filter's result); others are plain names.
+ */
 export function emitDocumentedCommands(
   documented: CommandModel[],
   settings: ResolvedCommandDocs,
-  options: { version: string; server: string; schemaDocs: string | null },
+  options: { version: string; server: string; schemaDocs: string | null; documentedTables: ReadonlySet<string> },
 ): { files: Map<string, string>; warnings: string[] } {
-  const { schemaDocs } = options;
+  const { schemaDocs, documentedTables } = options;
   const tableHref =
     schemaDocs !== null
-      ? (table: string) => relativeHref(join(settings.out, 'commands'), join(schemaDocs, 'tables', docFileName(table).file))
+      ? (table: string) =>
+          documentedTables.has(table)
+            ? relativeHref(join(settings.out, 'commands'), join(schemaDocs, 'tables', docFileName(table).file))
+            : undefined
       : undefined;
   return emitCommandDocs(
     documented,

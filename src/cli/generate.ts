@@ -252,8 +252,11 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   warn.print(warnings);
 
   let schemaOutput: { code: string; count: number; docs: Map<string, string> | null } | null = null;
+  // Tables that get a doc this run (the schema filter's result); command docs link only to these.
+  let documentedTables: ReadonlySet<string> = new Set();
   if (schema !== null && schemaSnapshot !== null) {
     const filtered = { ...schemaSnapshot, tables: filterTables(schemaSnapshot.tables, schema.filter) };
+    documentedTables = new Set(filtered.tables.map((t) => t.name));
     const emitted = emitSchema(filtered, { version: VERSION });
     warn.print(emitted.warnings);
     let docs: Map<string, string> | null = null;
@@ -274,6 +277,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       version: VERSION,
       server: snapshot.server,
       schemaDocs: schema?.docs ?? null,
+      documentedTables,
     });
     warn.print(emitted.warnings);
     commandDocsFiles = emitted.files;

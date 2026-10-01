@@ -12,8 +12,11 @@ export interface CommandDocsOptions {
   customLevels: string[];
   customTriggers: string[];
   triggers: boolean;
-  /** Relative href from `commands/<file>.md` to a table doc; undefined when schema docs are off. */
-  tableHref?: (table: string) => string;
+  /**
+   * Relative href from `commands/<file>.md` to a table doc, or undefined for a table without a doc (shown as a
+   * plain name). The option itself is undefined when schema docs are off.
+   */
+  tableHref?: (table: string) => string | undefined;
 }
 
 const SAFE = /^[a-z0-9_$#.]$/;
@@ -72,7 +75,10 @@ export function emitCommandDocs(commands: CommandModel[], options: CommandDocsOp
     const file = fileOf.get(name);
     return file === undefined ? `\`${name}\`` : `[\`${name}\`](${docHref(file)})`;
   };
-  const tableLink = (table: string) => (options.tableHref ? `[\`${table}\`](${docHref(options.tableHref(table))})` : `\`${table}\``);
+  const tableLink = (table: string) => {
+    const href = options.tableHref?.(table);
+    return href === undefined ? `\`${table}\`` : `[\`${table}\`](${docHref(href)})`;
+  };
 
   const sourceBlock = (def: CommandDefinition): string[] => {
     if (options.source === false || def.source === undefined) return [];
