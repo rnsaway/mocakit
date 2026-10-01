@@ -75,27 +75,39 @@ export function buildCommandModels(input: {
   return buildAgentModel({ commands: readCommandDefinitions(input.commandRows), triggers: input.triggers, args, tables: input.tables });
 }
 
-/** Link from a table doc (`<schemaDocs>/tables/x.md`) to a command doc. */
-export function commandHrefFor(settings: ResolvedCommandDocs, schemaDocs: string): (name: string) => string {
-  return (name) => relativeHref(join(schemaDocs, 'tables'), join(settings.out, 'commands', commandDocFile(commandKey(name)).file));
-}
-
-/** The moca-commands/ folder for the commands that pass `settings.filter`. */
-export function emitFilteredCommandDocs(
-  models: CommandModel[],
-  settings: ResolvedCommandDocs,
-  options: { version: string; server: string; schemaDocs: string | null },
-): { files: Map<string, string>; warnings: string[] } {
+/** The models whose docs are written: those that pass `settings.filter`. */
+export function documentedCommands(models: CommandModel[], settings: ResolvedCommandDocs): CommandModel[] {
   const kept = new Set(
     filterCommands(models.map((m) => ({ name: m.info.name, level: m.info.active.level, args: [] })), settings.filter).map((c) => c.name),
   );
+  return models.filter((m) => kept.has(m.info.name));
+}
+
+/** Link from a table doc (`<schemaDocs>/tables/x.md`) to a command doc; undefined for commands without a doc. */
+export function commandHrefFor(
+  settings: ResolvedCommandDocs,
+  schemaDocs: string,
+  documented: ReadonlySet<string>,
+): (name: string) => string | undefined {
+  return (name) =>
+    documented.has(name)
+      ? relativeHref(join(schemaDocs, 'tables'), join(settings.out, 'commands', commandDocFile(commandKey(name)).file))
+      : undefined;
+}
+
+/** The moca-commands/ folder for `documented` (see `documentedCommands`). */
+export function emitDocumentedCommands(
+  documented: CommandModel[],
+  settings: ResolvedCommandDocs,
+  options: { version: string; server: string; schemaDocs: string | null },
+): { files: Map<string, string>; warnings: string[] } {
   const { schemaDocs } = options;
   const tableHref =
     schemaDocs !== null
       ? (table: string) => relativeHref(join(settings.out, 'commands'), join(schemaDocs, 'tables', docFileName(table).file))
       : undefined;
   return emitCommandDocs(
-    models.filter((m) => kept.has(m.info.name)),
+    documented,
     {
       version: options.version,
       server: options.server,

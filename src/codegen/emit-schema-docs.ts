@@ -31,7 +31,8 @@ function readme(marker: string): string {
   ].join('\n');
 }
 
-type CommandHref = (command: string) => string;
+/** Link to a command's doc, or undefined when that command has no doc (shown as a plain name). */
+type CommandHref = (command: string) => string | undefined;
 
 function tableFile(marker: string, table: SchemaTable, coded: ReadonlyMap<string, ColumnCodes>, entry: TableUsage | undefined, commandHref: CommandHref | undefined): string {
   const key = table.primaryKey?.length ? ` · primary key: ${table.primaryKey.join(', ')}` : '';
@@ -46,7 +47,10 @@ function tableFile(marker: string, table: SchemaTable, coded: ReadonlyMap<string
   }
   lines.push('');
   if (entry && (entry.readBy.length > 0 || entry.writtenBy.length > 0)) {
-    const link = (name: string) => (commandHref ? `[\`${name}\`](${docHref(commandHref(name))})` : `\`${name}\``);
+    const link = (name: string) => {
+      const href = commandHref?.(name);
+      return href === undefined ? `\`${name}\`` : `[\`${name}\`](${docHref(href)})`;
+    };
     const list = (names: string[]) => (names.length > 50 ? `${names.slice(0, 50).map(link).join(', ')}, and ${names.length - 50} more` : names.map(link).join(', '));
     lines.push('## Used by (approximate, from command source)', '');
     if (entry.readBy.length > 0) lines.push(`- Read by: ${list(entry.readBy)}`);

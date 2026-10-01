@@ -501,8 +501,25 @@ describe('runGenerate with command docs and codes', () => {
     expect(schema.usage).toEqual([{ table: 'widget', readBy: [], writtenBy: ['list orders'] }]);
     expect(schema.codes.columns[0].column).toBe('widget_id');
     expect(await readFile(join(dir, 'src/moca-schema/codes/widget_id.md'), 'utf8')).toContain('| W1 | First |  |');
+    expect(await readFile(join(dir, 'src/moca-schema/tables/widget.md'), 'utf8')).toContain(
+      '- Written by: [`list orders`](../../moca-commands/commands/list-orders.md)',
+    );
     expect(out).toContain('Read 1 triggers on 1 commands');
     expect(out).toContain(`Wrote 1 command docs to ${join(dir, 'src/moca-commands')}`);
+  });
+
+  it('does not link table docs to commands the commandDocs filter left out', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ commandDocs: { include: ['nothing*'] } }));
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: agentServer().transport } });
+    const table = await readFile(join(dir, 'src/moca-schema/tables/widget.md'), 'utf8');
+    expect(table).toContain('- Written by: `list orders`');
+    expect(table).not.toContain('moca-commands');
+    expect(await exists(join(dir, 'src/moca-commands/commands/list-orders.md'))).toBe(false);
+    const schema = JSON.parse(await readFile(join(dir, 'src/moca.schema.json'), 'utf8'));
+    expect(schema.usage).toEqual([{ table: 'widget', readBy: [], writtenBy: ['list orders'] }]); // unfiltered
+    expect(out).toContain(`Wrote 0 command docs to ${join(dir, 'src/moca-commands')}`);
   });
 
   it('keeps the previous usage when a later run has command docs off', async () => {

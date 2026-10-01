@@ -94,7 +94,9 @@ describe('emitCommandDocs', () => {
     expect(doc).toContain('1. `usr audit` · sequence 10 · enabled');
     expect(doc).toContain('2. `product trg` · sequence 20 · disabled');
     expect(doc).toContain('- Calls: [`log widget`](log-widget.md)');
-    expect(doc).toContain('- Called by: [`process widget move`](process-widget-move.md)');
+    // `process widget move` is not among the emitted commands: plain name, no link to a missing doc
+    expect(doc).toContain('- Called by: `process widget move`');
+    expect(doc).not.toContain('process-widget-move.md');
     expect(doc).toContain('- Reads: [`widget`](../../moca-schema/tables/widget.md)');
     expect(doc).toContain('### WIDbase (sequence 100) · Local Syntax');
     expect(files.get('commands/create-widget.md')).toContain('C function: `wdgCreate`');

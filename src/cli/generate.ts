@@ -19,7 +19,8 @@ import { VERSION } from '../version.js';
 import {
   buildCommandModels,
   commandHrefFor,
-  emitFilteredCommandDocs,
+  documentedCommands,
+  emitDocumentedCommands,
   resolveCodesSettings,
   resolveCommandDocsSettings,
 } from './command-docs.js';
@@ -230,7 +231,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     const tables = schemaSnapshot !== null ? new Set(schemaSnapshot.tables.map((t) => t.name)) : null;
     const model = buildCommandModels({ commandRows, triggers, snapshot, tables });
     warn.print(model.warnings);
-    commandModels = model.commands;
+    commandModels = documentedCommands(model.commands, commandDocs);
     if (schemaSnapshot !== null && model.usage !== undefined) schemaSnapshot = { ...schemaSnapshot, usage: model.usage };
     if (tables === null) io.log('Command docs written without table cross-references (schema is off)');
     if (commandDocs.source === 'all') {
@@ -257,7 +258,10 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     warn.print(emitted.warnings);
     let docs: Map<string, string> | null = null;
     if (schema.docs !== null) {
-      const commandHref = commandModels !== null && commandDocs !== null ? commandHrefFor(commandDocs, schema.docs) : undefined;
+      const commandHref =
+        commandModels !== null && commandDocs !== null
+          ? commandHrefFor(commandDocs, schema.docs, new Set(commandModels.map((m) => m.info.name)))
+          : undefined;
       const docResult = emitSchemaDocs(filtered, { version: VERSION, commandHref });
       warn.print(docResult.warnings);
       docs = docResult.files;
@@ -266,7 +270,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   }
   let commandDocsFiles: Map<string, string> | null = null;
   if (commandDocs !== null && commandModels !== null) {
-    const emitted = emitFilteredCommandDocs(commandModels, commandDocs, {
+    const emitted = emitDocumentedCommands(commandModels, commandDocs, {
       version: VERSION,
       server: snapshot.server,
       schemaDocs: schema?.docs ?? null,

@@ -170,6 +170,15 @@ describe('emitSchemaDocs with codes and usage', () => {
     expect(doc).toContain('- Written by: [`create widget`](../../moca-commands/commands/create-widget.md)');
   });
 
+  it('uses a plain name when commandHref returns undefined (command not documented)', () => {
+    const doc = emitSchemaDocs(extended, {
+      version: '0.4.0',
+      commandHref: (c) => (c === 'create widget' ? '../../moca-commands/commands/create-widget.md' : undefined),
+    }).files.get('tables/widget.md')!;
+    expect(doc).toContain('- Read by: `list widgets`');
+    expect(doc).toContain('- Written by: [`create widget`](../../moca-commands/commands/create-widget.md)');
+  });
+
   it('uses plain names without commandHref', () => {
     expect(emitSchemaDocs(extended, { version: '0.4.0' }).files.get('tables/widget.md')).toContain('- Read by: `list widgets`');
   });

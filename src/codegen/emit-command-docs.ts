@@ -67,9 +67,10 @@ export function emitCommandDocs(commands: CommandModel[], options: CommandDocsOp
     if (encoded) warnings.push(`Command "${m.info.name}" has characters that are not safe in file names; its doc is commands/${file}`);
     fileOf.set(m.info.name, file);
   }
+  // Only commands documented in this run get a link; any other name is shown plain (no dead links).
   const commandLink = (name: string) => {
-    const file = fileOf.get(name) ?? commandDocFile(name.toLowerCase()).file;
-    return `[\`${name}\`](${docHref(file)})`;
+    const file = fileOf.get(name);
+    return file === undefined ? `\`${name}\`` : `[\`${name}\`](${docHref(file)})`;
   };
   const tableLink = (table: string) => (options.tableHref ? `[\`${table}\`](${docHref(options.tableHref(table))})` : `\`${table}\``);
 
