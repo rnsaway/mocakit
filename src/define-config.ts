@@ -11,6 +11,31 @@ export interface SchemaConfig {
   out?: string;
   /** Agent docs folder. Default `moca-schema` next to `out`; `false` skips it. */
   docs?: string | false;
+  /** Code values (codmst/dscmst) in the table docs. `true` uses the login locale, else US_ENGLISH. Default off. */
+  codes?: boolean | { locale?: string };
+}
+
+/** Opt-in command docs for AI agents (moca-commands/). */
+export interface CommandDocsConfig {
+  /** Output folder. Default `moca-commands` next to `out`. */
+  out?: string;
+  /** Command-name globs; default: the top-level `include` / `exclude`. */
+  include?: string[];
+  exclude?: string[];
+  /** Component levels; default: the top-level `levels`. */
+  levels?: string[];
+  /**
+   * Implementation source in command docs. 'custom' (default): only definitions at `customLevels`.
+   * 'all': every definition, including Blue Yonder product source (your licence decides whether you may).
+   * false: no source.
+   */
+  source?: 'custom' | 'all' | false;
+  /** Component levels treated as custom code (case-insensitive globs). Default ['USR*']. */
+  customLevels?: string[];
+  /** Trigger names treated as custom code (triggers carry no level). Default []. */
+  customTriggers?: string[];
+  /** Include triggers. Default true. */
+  triggers?: boolean;
 }
 
 export interface MocakitConfig {
@@ -36,6 +61,8 @@ export interface MocakitConfig {
   levels?: string[];
   /** `true` or an object enables schema introspection; see `SchemaConfig`. Default off. */
   schema?: boolean | SchemaConfig;
+  /** `true` or an object enables command docs (moca-commands/); see `CommandDocsConfig`. Default off. */
+  commandDocs?: boolean | CommandDocsConfig;
 }
 
 export function defineConfig(config: MocakitConfig): MocakitConfig {

@@ -3,16 +3,26 @@ import { dirname, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { MocaClient, type MocaClientDeps } from '../client/client.js';
 import type { MocakitConfig, SchemaConfig } from '../define-config.js';
+import type { CommandModel } from '../codegen/agent-model.js';
+import { checkDocsTargets, writeDocs } from '../codegen/docs-writer.js';
+import { readCodes, readTriggers, type TriggerInfo } from '../codegen/introspect-agent.js';
 import { emit } from '../codegen/emit.js';
 import { emitSchema, filterTables, type SchemaFilter } from '../codegen/emit-schema.js';
 import { checkSchemaDocsTargets, emitSchemaDocs, writeSchemaDocs } from '../codegen/emit-schema-docs.js';
 import { introspectSchema } from '../codegen/introspect-schema.js';
 import { readSchemaSnapshot, sameSchema, writeSchemaSnapshot, type SchemaSnapshot } from '../codegen/schema-snapshot.js';
 import { filterCommands } from '../codegen/filter.js';
-import { introspect } from '../codegen/introspect.js';
+import { introspect, type IntrospectResult } from '../codegen/introspect.js';
 import { readSnapshot, writeSnapshot, type Snapshot } from '../codegen/snapshot.js';
 import { redactUrl } from '../util/url.js';
 import { VERSION } from '../version.js';
+import {
+  buildCommandModels,
+  commandHrefFor,
+  emitFilteredCommandDocs,
+  resolveCodesSettings,
+  resolveCommandDocsSettings,
+} from './command-docs.js';
 import { loadConfig, resolveConnection } from './load-config.js';
 
 export interface CliIo {
@@ -26,6 +36,8 @@ export interface GenerateOptions {
   fromSnapshot?: string;
   /** `true` = --schema, `false` = --no-schema, `undefined` = the config decides. */
   schema?: boolean;
+  /** `true` = --command-docs, `false` = --no-command-docs, `undefined` = the config decides. */
+  commandDocs?: boolean;
   dryRun: boolean;
   /** Print every warning instead of the first `MAX_PRINTED_WARNINGS` and a count. */
   verbose?: boolean;
@@ -135,6 +147,8 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   const snapshotPath =
     config.snapshot !== undefined ? resolve(configDir, config.snapshot) : resolve(dirname(out), 'moca.commands.json');
   const schema = resolveSchemaSettings(config, options.schema, configDir, out);
+  const commandDocs = resolveCommandDocsSettings(config, options.commandDocs, configDir, out);
+  const codesSettings = resolveCodesSettings(config, schema !== null);
 
   if (!options.dryRun) {
     // Fail fast, before contacting the server, if an output directory can't be created.
@@ -143,19 +157,23 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     } catch (error) {
       throw new Error(`Cannot write ${out}: ${errorDetail(error)}`);
     }
-    if (schema !== null) {
-      for (const dir of [dirname(schema.snapshot), dirname(schema.out), ...(schema.docs === null ? [] : [schema.docs])]) {
-        try {
-          await mkdir(dir, { recursive: true });
-        } catch (error) {
-          throw new Error(`Cannot write ${dir}: ${errorDetail(error)}`);
-        }
+    const dirs = [
+      ...(schema === null ? [] : [dirname(schema.snapshot), dirname(schema.out), ...(schema.docs === null ? [] : [schema.docs])]),
+      ...(commandDocs !== null && options.fromSnapshot === undefined ? [commandDocs.out] : []),
+    ];
+    for (const dir of dirs) {
+      try {
+        await mkdir(dir, { recursive: true });
+      } catch (error) {
+        throw new Error(`Cannot write ${dir}: ${errorDetail(error)}`);
       }
     }
   }
 
   let snapshot: Snapshot;
   let schemaSnapshot: SchemaSnapshot | null = null;
+  let commandRows: IntrospectResult['commandRows'];
+  let triggers: TriggerInfo[] = [];
   if (options.fromSnapshot !== undefined) {
     const snapshotFile = resolve(cwd, options.fromSnapshot);
     try {
@@ -170,24 +188,61 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       throw new Error(`Cannot read snapshot ${snapshotFile}: ${errorDetail(error)}`);
     }
     if (schema !== null) schemaSnapshot = await readSchemaFile(schema.snapshot);
+    if (commandDocs !== null) io.log('Skipped command docs: they need a live server (--from-snapshot)');
   } else {
     const connection = resolveConnection(config, env);
     io.log(`Introspecting ${redactUrl(connection.url)} …`);
     const client = new MocaClient({ ...connection, session: { reuse: false } }, options.deps);
     let introspected: Awaited<ReturnType<typeof introspect>>;
     let schemaResult: Awaited<ReturnType<typeof introspectSchema>> | null = null;
+    let codesResult: Awaited<ReturnType<typeof readCodes>> | null = null;
     try {
-      introspected = await introspect(client, { version: VERSION, server: connection.url });
+      introspected = await introspect(client, { version: VERSION, server: connection.url, keepCommandRows: commandDocs !== null });
       if (schema !== null) schemaResult = await introspectSchema(client, { version: VERSION, server: connection.url });
+      if (codesSettings !== null) {
+        codesResult = await readCodes(client, codesSettings.locale ?? client.session.locale ?? 'US_ENGLISH');
+      }
+      if (commandDocs !== null && commandDocs.triggers) triggers = await readTriggers(client);
     } finally {
       await client.logout().catch(() => undefined);
     }
     snapshot = introspected.snapshot;
+    commandRows = introspected.commandRows;
     warn.print(introspected.warnings);
     if (schemaResult !== null) {
       schemaSnapshot = schemaResult.snapshot;
       warn.print(schemaResult.warnings);
     }
+    if (codesResult !== null) {
+      warn.print(codesResult.warnings);
+      const { codes } = codesResult;
+      if (schemaSnapshot !== null) schemaSnapshot = { ...schemaSnapshot, codes };
+      const values = codes.columns.reduce((n, c) => n + c.values.length, 0);
+      io.log(`Read ${values} code values for ${codes.columns.length} columns (locale ${codes.locale})`);
+    }
+    if (commandDocs !== null && commandDocs.triggers) {
+      io.log(`Read ${triggers.length} triggers on ${new Set(triggers.map((t) => t.command)).size} commands`);
+    }
+  }
+
+  let commandModels: CommandModel[] | null = null;
+  if (commandDocs !== null && commandRows !== undefined) {
+    const tables = schemaSnapshot !== null ? new Set(schemaSnapshot.tables.map((t) => t.name)) : null;
+    const model = buildCommandModels({ commandRows, triggers, snapshot, tables });
+    warn.print(model.warnings);
+    commandModels = model.commands;
+    if (schemaSnapshot !== null && model.usage !== undefined) schemaSnapshot = { ...schemaSnapshot, usage: model.usage };
+    if (tables === null) io.log('Command docs written without table cross-references (schema is off)');
+    if (commandDocs.source === 'all') {
+      io.log("Command docs include Blue Yonder product source (commandDocs.source = 'all'); keep them in a private repository.");
+    }
+  }
+
+  // Keep the previous usage when this run did not compute it (command docs off), so the table
+  // docs' "Used by" sections survive. Code values are never carried over.
+  const existingSchema = schema !== null && schemaSnapshot !== null ? await readSchemaSnapshot(schema.snapshot).catch(() => null) : null;
+  if (schemaSnapshot !== null && schemaSnapshot.usage === undefined && existingSchema?.usage !== undefined) {
+    schemaSnapshot = { ...schemaSnapshot, usage: existingSchema.usage };
   }
 
   const commands = filterCommands(snapshot.commands, config);
@@ -202,16 +257,31 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     warn.print(emitted.warnings);
     let docs: Map<string, string> | null = null;
     if (schema.docs !== null) {
-      const docResult = emitSchemaDocs(filtered, { version: VERSION });
+      const commandHref = commandModels !== null && commandDocs !== null ? commandHrefFor(commandDocs, schema.docs) : undefined;
+      const docResult = emitSchemaDocs(filtered, { version: VERSION, commandHref });
       warn.print(docResult.warnings);
       docs = docResult.files;
     }
     schemaOutput = { code: emitted.code, count: emitted.count, docs };
   }
+  let commandDocsFiles: Map<string, string> | null = null;
+  if (commandDocs !== null && commandModels !== null) {
+    const emitted = emitFilteredCommandDocs(commandModels, commandDocs, {
+      version: VERSION,
+      server: snapshot.server,
+      schemaDocs: schema?.docs ?? null,
+    });
+    warn.print(emitted.warnings);
+    commandDocsFiles = emitted.files;
+  }
   warn.finish();
 
+  // Every docs target must pass the hand-written-file check before anything is written.
   if (!options.dryRun && schema !== null && schema.docs !== null && schemaOutput?.docs) {
     await checkSchemaDocsTargets(schema.docs, schemaOutput.docs);
+  }
+  if (!options.dryRun && commandDocs !== null && commandDocsFiles !== null) {
+    await checkDocsTargets(commandDocs.out, commandDocsFiles, 'commandDocs.out');
   }
 
   if (options.fromSnapshot === undefined) {
@@ -229,7 +299,6 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       io.log(`Wrote snapshot of ${snapshot.commands.length} commands to ${snapshotPath}`);
     }
     if (schema !== null && schemaSnapshot !== null) {
-      const existingSchema = await readSchemaSnapshot(schema.snapshot).catch(() => null);
       const columns = schemaSnapshot.tables.reduce((n, t) => n + t.columns.length, 0);
       if (existingSchema !== null && sameSchema(existingSchema, schemaSnapshot)) {
         if (!options.dryRun) io.log(`Schema snapshot unchanged: ${schema.snapshot}`);
@@ -270,5 +339,14 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       }
       io.log(`${verb} ${schemaOutput.count} table docs to ${schema.docs}`);
     }
+  }
+
+  if (commandDocs !== null && commandDocsFiles !== null) {
+    const count = [...commandDocsFiles.keys()].filter((k) => k.startsWith('commands/')).length;
+    if (!options.dryRun) {
+      const result = await writeDocs(commandDocs.out, commandDocsFiles, { setting: 'commandDocs.out', managedDirs: ['commands'] });
+      if (result.removed.length > 0) io.log(`Removed ${result.removed.length} stale command docs from ${commandDocs.out}`);
+    }
+    io.log(`${verb} ${count} command docs to ${commandDocs.out}`);
   }
 }
