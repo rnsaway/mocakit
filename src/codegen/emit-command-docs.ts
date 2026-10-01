@@ -16,14 +16,17 @@ export interface CommandDocsOptions {
   tableHref?: (table: string) => string;
 }
 
-const SAFE = /^[a-z0-9_$#.-]$/;
+const SAFE = /^[a-z0-9_$#.]$/;
 const CAP = 50;
 
 export function commandDocFile(key: string): { file: string; encoded: boolean } {
-  return encodeDocName(key.split(' ').join('_'), SAFE);
+  // Injective: spaces become '-', and a literal '-' is percent-encoded (it is not in SAFE).
+  const parts = key.split(' ').map((part) => encodeDocName(part, SAFE));
+  return { file: `${parts.map((p) => p.file.slice(0, -3)).join('-')}.md`, encoded: parts.some((p) => p.encoded) };
 }
 
 const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
+const noTicks = (text: string): string => oneLine(text).split('`').join('\`');
 const cell = (text: string | undefined): string => (text === undefined ? '' : oneLine(text).split('\\').join('\\\\').split('|').join('\\|'));
 
 function fence(source: string): string {
@@ -80,9 +83,9 @@ export function emitCommandDocs(commands: CommandModel[], options: CommandDocsOp
     'README.md',
     [
       marker,
-      '# MOCA commands (for coding agents)',
-      '',
       PRIVATE_NOTICE,
+      '',
+      '# MOCA commands (for coding agents)',
       '',
       '- Search `INDEX.md` for a command by name or description, then open `commands/<command>.md`.',
       '- "Active" is the definition MOCA runs (highest component level); "Overrides" lists the lower-level ones it replaces.',
@@ -92,7 +95,7 @@ export function emitCommandDocs(commands: CommandModel[], options: CommandDocsOp
     ].join('\n'),
   );
 
-  const index = [marker, '# Commands', '', PRIVATE_NOTICE, ''];
+  const index = [marker, PRIVATE_NOTICE, '', '# Commands', ''];
   const docs: Array<[string, string]> = [];
   for (const m of [...commands].sort((a, b) => (a.info.key < b.info.key ? -1 : a.info.key > b.info.key ? 1 : 0))) {
     const { active } = m.info;
@@ -102,7 +105,7 @@ export function emitCommandDocs(commands: CommandModel[], options: CommandDocsOp
     index.push(`- [\`${m.info.name}\`](commands/${docHref(file)}) · ${active.level} · ${active.type ?? 'unknown type'}${triggerCount}${description}`);
 
     const lines = [marker, `# ${m.info.name}`, ''];
-    if (active.description !== undefined) lines.push(oneLine(active.description), '');
+    if (active.description !== undefined) lines.push(noTicks(active.description), '');
     lines.push(
       `- Level: \`${active.level}\` (sequence ${active.levelSeq})`,
       `- Type: ${active.type ?? 'unknown'}`,

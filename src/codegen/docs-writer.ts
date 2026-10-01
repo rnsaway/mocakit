@@ -25,9 +25,9 @@ export function encodeDocName(name: string, safe: RegExp): { file: string; encod
   return { file: `${file}.md`, encoded };
 }
 
-/** A markdown link target for a generated file name (`#` would start a fragment). */
+/** A markdown link target for a generated file name (`%` and `#` are escaped so renderers keep them literal). */
 export function docHref(file: string): string {
-  return file.split('#').join('%23');
+  return file.split('%').join('%25').split('#').join('%23');
 }
 
 const pathOf = (dir: string, relative: string): string => join(dir, ...relative.split('/'));

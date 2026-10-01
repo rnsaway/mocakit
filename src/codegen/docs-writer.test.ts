@@ -27,6 +27,7 @@ describe('docs-writer helpers', () => {
     expect(encodeDocName('list_widgets', /^[a-z0-9_]$/)).toEqual({ file: 'list_widgets.md', encoded: false });
     expect(encodeDocName('a b', /^[a-z0-9_]$/)).toEqual({ file: 'a%20b.md', encoded: true });
     expect(docHref('pick#1.md')).toBe('pick%231.md');
+    expect(docHref('a%2Fb#1.md')).toBe('a%252Fb%231.md');
     expect(PRIVATE_NOTICE).toBe('This folder describes a licensed Blue Yonder system. Keep it in a private repository.');
   });
 });
