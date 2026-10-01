@@ -442,6 +442,83 @@ is generated as `cmdFrom`.
 
 Nullable columns add `| null`. Names are lowercased to match MOCA's row keys.
 
+## Command docs & code values for AI agents
+
+Beyond the table docs, `mocakit generate` can write one Markdown page per MOCA command, with its arguments, source,
+triggers and an approximate call graph, plus the code values (`codmst`/`dscmst`) behind coded columns. Both are
+opt-in and need a live server.
+
+### Enabling it
+
+```ts
+// mocakit.config.ts
+import { defineConfig } from 'mocakit';
+
+export default defineConfig({
+  out: 'src/moca.generated.ts',
+  schema: { codes: true },   // or { codes: { locale: 'US_ENGLISH' } }; default false
+  commandDocs: true,         // or an object with any of these options (defaults shown):
+  // commandDocs: {
+  //   out: 'src/moca-commands',       // default: moca-commands next to `out`
+  //   include: ['*'],                 // command-name globs; default: the top-level include/exclude
+  //   exclude: [],
+  //   levels: [],                      // component levels; default: the top-level levels
+  //   source: 'custom',               // 'custom' | 'all' | false (see "Source code" below)
+  //   customLevels: ['USR*'],         // component levels treated as your own code (globs)
+  //   customTriggers: [],             // trigger names treated as your own code (globs)
+  //   triggers: true,                 // include triggers
+  // },
+});
+```
+
+`mocakit generate --command-docs` enables command docs for one run and `--no-command-docs` disables them for one run
+even if the config enables them (using both is an error). `--dry-run` reports counts and writes nothing.
+`--from-snapshot` skips command docs (they need a live server) and logs that it did; the table "Used by" sections and
+code values are stored in `moca.schema.json`, so they survive offline rebuilds.
+
+### What you get
+
+`moca-commands/` contains `README.md`, `INDEX.md` and `commands/<command-name>.md` (spaces in a command name become
+`-`). Each command page lists:
+
+- description, component level, type and transaction setting, and the arguments table;
+- the implementation: Local Syntax source in a fenced block, or ``Java: `<class>.<method>` `` / ``C function: `<name>` ``;
+- triggers in firing order, with sequence and enabled/disabled;
+- **Calls / Called by** and **Reads / Writes** (tables), as links to the documented commands and table pages;
+- every lower-level **Override** with its own level and source.
+
+Table pages in `moca-schema/tables/` gain a **Used by** section (commands that read or write the table), and with
+`schema.codes` each coded column links to `moca-schema/codes/<column>.md` with its values and descriptions.
+
+The call graph and the table cross-reference are approximate: they come from scanning command source. Dynamic SQL
+(`[select ... from @tbl]`), commands assembled as strings, and Java or C commands are not covered, and a table alias
+that equals a real table name can add a false read. Links go only to commands that have a page; any other command or
+table is shown as plain text.
+
+### Source code
+
+Blue Yonder's own command source is confidential and may be covered by your agreement, so by default
+(`source: 'custom'`) mocakit writes implementation source only for definitions at your custom component levels
+(`customLevels`, default `['USR*']`). Product-level definitions still get a page with their arguments, order and
+cross-references, but show a "Source not included" notice instead of the code.
+
+- `source: 'all'` also writes product source. Set it only if your Blue Yonder agreement allows it; `generate` prints a
+  reminder when it is on.
+- `source: false` writes no source anywhere.
+- Triggers carry no component level, so under `'custom'` a trigger's source is written only if its name matches
+  `customTriggers`; otherwise its name, sequence and enabled state are shown without source.
+
+### Keep it private
+
+Generated `README.md` and `INDEX.md` in `moca-commands/` and `moca-schema/` open with a notice that the folder
+describes a licensed Blue Yonder system and belongs in a private repository. Table and column comments, code values
+and your custom source all end up in these files, so do not commit them to a public repository.
+
+### Size
+
+A full WMS has roughly 10,000 commands, so `moca-commands/` is about 10,000 files (on the order of ten megabytes of
+text). Later runs rewrite only the files that changed. Use `commandDocs.include`, `exclude` or `levels` to shrink it.
+
 ## Response format
 
 With the default `format: 'rows'`, a call resolves to `T[]`, one plain object per row, with keys exactly as MOCA

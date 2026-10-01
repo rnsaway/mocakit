@@ -29,6 +29,16 @@ function run(handler: (r: FakeRequest) => string) {
 }
 
 describe('introspect', () => {
+  it('returns the raw command rows when keepCommandRows is set', async () => {
+    const fake = fakeMoca((r) => (r.query.startsWith('login user') ? loginOk() : r.query === 'list active commands' ? COMMANDS : ARGS));
+    const client = new MocaClient({ ...baseConfig }, { transport: fake.transport });
+    const result = await introspect(client, { version: '0.4.0', server: 'https://moca.test/service', keepCommandRows: true });
+    expect(result.commandRows?.columns).toEqual(['command', 'cmplvl', 'type', 'description']);
+    expect(result.commandRows?.rows).toHaveLength(3);
+    const without = await introspect(client, { version: '0.4.0', server: 'https://moca.test/service' });
+    expect(without.commandRows).toBeUndefined();
+  });
+
   it('skips invalid command names with a warning', async () => {
     const commands = mocaXml(0, {
       columns: [{ name: 'command' }],

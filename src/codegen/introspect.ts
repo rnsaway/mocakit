@@ -32,19 +32,22 @@ const ARG_COLUMNS = {
 };
 
 const ARGS_BY_COMMAND: CommandSpec = ['list active command arguments', [['command', 'S', 1]]];
-const TRUE_FLAGS = new Set(['1', 'y', 'yes', 't', 'true']);
+export const TRUE_FLAGS = new Set(['1', 'y', 'yes', 't', 'true']);
 
 export interface IntrospectOptions {
   version: string;
   server: string;
   /** Parallel per-command argument queries in fallback mode. Default 8. */
   concurrency?: number;
+  /** Also return the raw "list active commands" rows (used for command docs). */
+  keepCommandRows?: boolean;
 }
 
 export interface IntrospectResult {
   snapshot: Snapshot;
   /** Commands that were skipped (e.g. names that are not valid MOCA command names). */
   warnings: string[];
+  commandRows?: { columns: string[]; rows: MocaRow[] };
 }
 
 type ColumnMap<K extends string> = Record<K, string | undefined>;
@@ -270,5 +273,6 @@ export async function introspect(client: MocaClient, options: IntrospectOptions)
       commands: [...commands.values()].sort((a, b) => byCodeUnit(a.name, b.name)),
     },
     warnings,
+    ...(options.keepCommandRows === true && { commandRows: { columns: commandColumnNames, rows: commandResult.rows } }),
   };
 }

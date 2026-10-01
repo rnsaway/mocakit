@@ -284,4 +284,17 @@ describe('runCli .env loading', () => {
     expect(out.join('\n')).toContain('--schema');
     expect(out.join('\n')).toContain('--no-schema');
   });
+
+  it('rejects --command-docs together with --no-command-docs', async () => {
+    const { io: cliIo, err } = capture();
+    expect(await runCli(['generate', '--command-docs', '--no-command-docs'], cliIo, await tempDir())).toBe(1);
+    expect(err).toContain('mocakit: --command-docs and --no-command-docs cannot be used together');
+  });
+
+  it('documents the command-docs flags', async () => {
+    const { io: cliIo, out } = capture();
+    await runCli(['--help'], cliIo);
+    expect(out.join('\n')).toContain('--command-docs');
+    expect(out.join('\n')).toContain('--no-command-docs');
+  });
 });

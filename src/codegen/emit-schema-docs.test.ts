@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { PRIVATE_NOTICE } from './docs-writer.js';
 import { DOC_MARKER, docFileName, emitSchemaDocs, writeSchemaDocs } from './emit-schema-docs.js';
 import type { SchemaSnapshot } from './schema-snapshot.js';
 
@@ -79,7 +80,7 @@ describe('writeSchemaDocs', () => {
 
     const { files } = emitSchemaDocs(snapshot, { version: '0.3.0' });
     const first = await writeSchemaDocs(dir, files);
-    expect(first).toEqual({ written: 5, unchanged: 0, removed: ['dropped.md'] });
+    expect(first).toEqual({ written: 5, unchanged: 0, removed: ['tables/dropped.md'] });
     expect((await readdir(join(dir, 'tables'))).sort()).toEqual(['index.md', 'notes.md', 'other.txt', 'weird%20name.md', 'widget.md']);
     expect(await readFile(join(dir, 'INDEX.md'), 'utf8')).toBe(files.get('INDEX.md'));
 
@@ -127,6 +128,59 @@ describe('writeSchemaDocs', () => {
     );
     expect(files.get('INDEX.md')).toContain('](tables/pick%231.md)');
     expect(files.has('tables/pick#1.md')).toBe(true);
+  });
+});
+
+describe('emitSchemaDocs with codes and usage', () => {
+  const extended: SchemaSnapshot = {
+    ...snapshot,
+    tables: [
+      {
+        name: 'widget',
+        kind: 'table',
+        columns: [
+          { name: 'widget_id', type: 'nvarchar', category: 'string', nullable: false, length: 20 },
+          { name: 'wdgsts', type: 'nvarchar', category: 'string', nullable: true, length: 1, comment: 'Status' },
+        ],
+      },
+    ],
+    codes: { locale: 'US_ENGLISH', columns: [{ column: 'wdgsts', values: [{ value: 'A', short: 'Active', long: 'In | use' }, { value: 'X' }] }] },
+    usage: [{ table: 'widget', readBy: ['list widgets'], writtenBy: ['create widget'] }],
+  };
+  const { files } = emitSchemaDocs(extended, { version: '0.4.0', commandHref: (c) => `../../moca-commands/commands/${c.split(' ').join('-')}.md` });
+
+  it('opens README and INDEX with the private notice right after the marker', () => {
+    expect(files.get('README.md')!.split('\n')[1]).toBe(PRIVATE_NOTICE);
+    expect(files.get('INDEX.md')!.split('\n')[1]).toBe(PRIVATE_NOTICE);
+  });
+
+  it('links coded columns and writes one codes file per column', () => {
+    expect(files.get('tables/widget.md')).toContain('| wdgsts | nvarchar(1) | yes |  | Status · [codes](../codes/wdgsts.md) |');
+    const codes = files.get('codes/wdgsts.md')!;
+    expect(codes.startsWith(DOC_MARKER)).toBe(true);
+    expect(codes).toContain('# wdgsts codes (US_ENGLISH)');
+    expect(codes).toContain('| A | Active | In \\| use |');
+    expect(codes).toContain('| X |  |  |');
+  });
+
+  it('lists the commands that read and write the table', () => {
+    const doc = files.get('tables/widget.md')!;
+    expect(doc).toContain('## Used by (approximate, from command source)');
+    expect(doc).toContain('- Read by: [`list widgets`](../../moca-commands/commands/list-widgets.md)');
+    expect(doc).toContain('- Written by: [`create widget`](../../moca-commands/commands/create-widget.md)');
+  });
+
+  it('uses a plain name when commandHref returns undefined (command not documented)', () => {
+    const doc = emitSchemaDocs(extended, {
+      version: '0.4.0',
+      commandHref: (c) => (c === 'create widget' ? '../../moca-commands/commands/create-widget.md' : undefined),
+    }).files.get('tables/widget.md')!;
+    expect(doc).toContain('- Read by: `list widgets`');
+    expect(doc).toContain('- Written by: [`create widget`](../../moca-commands/commands/create-widget.md)');
+  });
+
+  it('uses plain names without commandHref', () => {
+    expect(emitSchemaDocs(extended, { version: '0.4.0' }).files.get('tables/widget.md')).toContain('- Read by: `list widgets`');
   });
 });
 

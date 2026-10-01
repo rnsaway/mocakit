@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fakeMoca, loginOk, mocaXml } from '../../test/helpers/fake-moca.js';
+import { fakeMoca, loginOk, mocaXml, type FakeRequest } from '../../test/helpers/fake-moca.js';
 import { SQLSERVER_COLUMNS, SQLSERVER_KEYS } from '../codegen/introspect-schema.js';
 import { moduleSpecifier, resolveSchemaSettings, runGenerate } from './generate.js';
 
@@ -321,32 +321,34 @@ describe('runGenerate', () => {
 
 const exists = (p: string) => access(p).then(() => true, () => false);
 
+function schemaServerHandler(r: FakeRequest, overrides: { keys?: string } = {}): string {
+  if (r.query.startsWith('login user')) return loginOk();
+  if (r.query === 'list active commands') return mocaXml(0, { columns: [{ name: 'command' }], rows: [['list orders']] });
+  if (r.query === 'list active command arguments') {
+    return mocaXml(0, { columns: [{ name: 'command' }, { name: 'argnam' }, { name: 'dtype' }, { name: 'argreq' }], rows: [['list orders', 'wh_id', 'S', '1']] });
+  }
+  if (r.query === 'get database') return mocaXml(0, { columns: [{ name: 'database' }], rows: [['sqlserver']] });
+  if (r.query === SQLSERVER_COLUMNS) {
+    return mocaXml(0, {
+      columns: [
+        { name: 'table_name' }, { name: 'table_kind' }, { name: 'table_comment' }, { name: 'column_name' },
+        { name: 'ordinal', type: 'I' }, { name: 'data_type' }, { name: 'max_length', type: 'I' },
+        { name: 'precision', type: 'I' }, { name: 'scale', type: 'I' }, { name: 'is_nullable', type: 'O' }, { name: 'column_comment' },
+      ],
+      rows: [
+        ['widget', 'table', 'Widgets.', 'widget_id', '1', 'nvarchar', '40', '0', '0', '0', null],
+        ['tmp_widget', 'table', null, 'a', '1', 'int', '4', '10', '0', '1', null],
+      ],
+    });
+  }
+  if (r.query === SQLSERVER_KEYS) {
+    return overrides.keys ?? mocaXml(0, { columns: [{ name: 'table_name' }, { name: 'column_name' }, { name: 'key_ordinal', type: 'I' }], rows: [['widget', 'widget_id', '1']] });
+  }
+  return mocaXml(0);
+}
+
 function schemaServer(overrides: { keys?: string } = {}) {
-  return fakeMoca((r) => {
-    if (r.query.startsWith('login user')) return loginOk();
-    if (r.query === 'list active commands') return mocaXml(0, { columns: [{ name: 'command' }], rows: [['list orders']] });
-    if (r.query === 'list active command arguments') {
-      return mocaXml(0, { columns: [{ name: 'command' }, { name: 'argnam' }, { name: 'dtype' }, { name: 'argreq' }], rows: [['list orders', 'wh_id', 'S', '1']] });
-    }
-    if (r.query === 'get database') return mocaXml(0, { columns: [{ name: 'database' }], rows: [['sqlserver']] });
-    if (r.query === SQLSERVER_COLUMNS) {
-      return mocaXml(0, {
-        columns: [
-          { name: 'table_name' }, { name: 'table_kind' }, { name: 'table_comment' }, { name: 'column_name' },
-          { name: 'ordinal', type: 'I' }, { name: 'data_type' }, { name: 'max_length', type: 'I' },
-          { name: 'precision', type: 'I' }, { name: 'scale', type: 'I' }, { name: 'is_nullable', type: 'O' }, { name: 'column_comment' },
-        ],
-        rows: [
-          ['widget', 'table', 'Widgets.', 'widget_id', '1', 'nvarchar', '40', '0', '0', '0', null],
-          ['tmp_widget', 'table', null, 'a', '1', 'int', '4', '10', '0', '1', null],
-        ],
-      });
-    }
-    if (r.query === SQLSERVER_KEYS) {
-      return overrides.keys ?? mocaXml(0, { columns: [{ name: 'table_name' }, { name: 'column_name' }, { name: 'key_ordinal', type: 'I' }], rows: [['widget', 'widget_id', '1']] });
-    }
-    return mocaXml(0);
-  });
+  return fakeMoca((r) => schemaServerHandler(r, overrides));
 }
 
 describe('runGenerate with schema', () => {
@@ -453,5 +455,152 @@ describe('runGenerate with schema', () => {
   it('computes NodeNext module specifiers', () => {
     expect(moduleSpecifier(join('/p', 'src', 'moca.generated.ts'), join('/p', 'src', 'moca.schema.ts'))).toBe('./moca.schema.js');
     expect(moduleSpecifier(join('/p', 'src', 'moca.generated.ts'), join('/p', 'types', 'schema.mts'))).toBe('../types/schema.mjs');
+  });
+});
+
+function agentServer(overrides: { triggers?: string } = {}) {
+  return fakeMoca((r) => {
+    if (r.query.startsWith('login user')) return loginOk();
+    if (r.query === 'list active commands') {
+      return mocaXml(0, {
+        columns: [{ name: 'cmplvl' }, { name: 'cmplvlseq', type: 'I' }, { name: 'command' }, { name: 'type' }, { name: 'syntax' }, { name: 'desc' }],
+        rows: [
+          ['WIDbase', '100', 'list orders', 'Local Syntax', '[select a from widget]', 'Lists orders'],
+          ['USRwid', '9000', 'list orders', 'Local Syntax', 'list orders base | [update widget set a = 1]', 'Custom list'],
+        ],
+      });
+    }
+    if (r.query === 'list active triggers') {
+      return (
+        overrides.triggers ??
+        mocaXml(0, {
+          columns: [{ name: 'name' }, { name: 'command' }, { name: 'trgseq', type: 'I' }, { name: 'syntax' }, { name: 'enabled', type: 'O' }],
+          rows: [['audit', 'list orders', '10', 'noop', '1']],
+        })
+      );
+    }
+    if (r.query.includes('from codmst')) return mocaXml(0, { columns: [{ name: 'colnam' }, { name: 'codval' }, { name: 'srtseq', type: 'I' }], rows: [['widget_id', 'W1', '1']] });
+    if (r.query.includes('from dscmst')) return mocaXml(0, { columns: [{ name: 'colnam' }, { name: 'colval' }, { name: 'short_dsc' }, { name: 'lngdsc' }], rows: [['widget_id', 'W1', 'First', null]] });
+    return schemaServerHandler(r);
+  });
+}
+
+describe('runGenerate with command docs and codes', () => {
+  const env = { MOCA_URL: 'https://moca.test/service', MOCA_USER: 'u', MOCA_PASSWORD: 'p' };
+
+  it('writes command docs, codes and usage with --schema --command-docs', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ schema: { codes: true } }));
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: true, commandDocs: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: agentServer().transport } });
+    const doc = await readFile(join(dir, 'src/moca-commands/commands/list-orders.md'), 'utf8');
+    expect(doc).toContain('list orders base | [update widget set a = 1]'); // USR source shown
+    expect(doc).not.toContain('[select a from widget]'); // product source hidden
+    expect(doc).toContain('[`widget`](../../moca-schema/tables/widget.md)');
+    const schema = JSON.parse(await readFile(join(dir, 'src/moca.schema.json'), 'utf8'));
+    expect(schema.usage).toEqual([{ table: 'widget', readBy: [], writtenBy: ['list orders'] }]);
+    expect(schema.codes.columns[0].column).toBe('widget_id');
+    expect(await readFile(join(dir, 'src/moca-schema/codes/widget_id.md'), 'utf8')).toContain('| W1 | First |  |');
+    expect(await readFile(join(dir, 'src/moca-schema/tables/widget.md'), 'utf8')).toContain(
+      '- Written by: [`list orders`](../../moca-commands/commands/list-orders.md)',
+    );
+    expect(out).toContain('Read 1 triggers on 1 commands');
+    expect(out).toContain(`Wrote 1 command docs to ${join(dir, 'src/moca-commands')}`);
+  });
+
+  it('does not link table docs to commands the commandDocs filter left out', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ commandDocs: { include: ['nothing*'] } }));
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: agentServer().transport } });
+    const table = await readFile(join(dir, 'src/moca-schema/tables/widget.md'), 'utf8');
+    expect(table).toContain('- Written by: `list orders`');
+    expect(table).not.toContain('moca-commands');
+    expect(await exists(join(dir, 'src/moca-commands/commands/list-orders.md'))).toBe(false);
+    const schema = JSON.parse(await readFile(join(dir, 'src/moca.schema.json'), 'utf8'));
+    expect(schema.usage).toEqual([{ table: 'widget', readBy: [], writtenBy: ['list orders'] }]); // unfiltered
+    expect(out).toContain(`Wrote 0 command docs to ${join(dir, 'src/moca-commands')}`);
+  });
+
+  it('does not link command docs to tables the schema filter left out', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ schema: { exclude: ['widget'] } }));
+    await runGenerate({ schema: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    const doc = await readFile(join(dir, 'src/moca-commands/commands/list-orders.md'), 'utf8');
+    expect(doc).toContain('- Writes: `widget`');
+    expect(doc).not.toContain('moca-schema/tables/widget.md');
+    expect(await exists(join(dir, 'src/moca-schema/tables/widget.md'))).toBe(false);
+  });
+
+  it('keeps the previous usage when a later run has command docs off', async () => {
+    const dir = await tempDir();
+    await runGenerate({ schema: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    await runGenerate({ schema: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    const schema = JSON.parse(await readFile(join(dir, 'src/moca.schema.json'), 'utf8'));
+    expect(schema.usage).toEqual([{ table: 'widget', readBy: [], writtenBy: ['list orders'] }]);
+    expect(await readFile(join(dir, 'src/moca-schema/tables/widget.md'), 'utf8')).toContain('Written by');
+  });
+
+  it('keeps "Used by" command links in offline and --no-command-docs runs, from the generated command INDEX', async () => {
+    const dir = await tempDir();
+    const tableDoc = join(dir, 'src/moca-schema/tables/widget.md');
+    await runGenerate({ schema: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    const first = await readFile(tableDoc, 'utf8');
+    expect(first).toContain('[`list orders`](../../moca-commands/commands/list-orders.md)');
+
+    await runGenerate({ schema: true, fromSnapshot: 'src/moca.commands.json', dryRun: false, cwd: dir, env: {}, io: io().io });
+    expect(await readFile(tableDoc, 'utf8')).toBe(first);
+
+    await runGenerate({ schema: true, commandDocs: false, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    expect(await readFile(tableDoc, 'utf8')).toBe(first);
+  });
+
+  it('honours a configured commandDocs.out when reading the command INDEX with command docs off', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ commandDocs: { out: 'agent/cmds' } }));
+    await runGenerate({ schema: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    await runGenerate({ schema: true, commandDocs: false, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    expect(await readFile(join(dir, 'src/moca-schema/tables/widget.md'), 'utf8')).toContain(
+      '[`list orders`](../../../agent/cmds/commands/list-orders.md)',
+    );
+  });
+
+  it('refuses before writing anything when moca-commands holds a hand-written file', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'src/moca-commands'), { recursive: true });
+    await writeFile(join(dir, 'src/moca-commands/README.md'), '# mine\n');
+    await expect(
+      runGenerate({ schema: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } }),
+    ).rejects.toThrow(/was not generated by mocakit; move it or choose another commandDocs.out directory/);
+    for (const f of ['src/moca.commands.json', 'src/moca.generated.ts', 'src/moca.schema.json', 'src/moca-schema/INDEX.md']) {
+      expect(await exists(join(dir, f))).toBe(false);
+    }
+  });
+
+  it('writes nothing when reading triggers fails', async () => {
+    const dir = await tempDir();
+    const fake = agentServer({ triggers: mocaXml(511, {}, 'denied') });
+    await expect(
+      runGenerate({ commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: fake.transport } }),
+    ).rejects.toThrow(/^Reading triggers failed \(MOCA status 511\)/);
+    expect(await exists(join(dir, 'src/moca.commands.json'))).toBe(false);
+  });
+
+  it('skips command docs with a note under --from-snapshot', async () => {
+    const dir = await tempDir();
+    const { io: cliIo, out } = io();
+    await runGenerate({ commandDocs: true, fromSnapshot: fixture, dryRun: false, cwd: dir, env: {}, io: cliIo });
+    expect(out).toContain('Skipped command docs: they need a live server (--from-snapshot)');
+    expect(await exists(join(dir, 'src/moca-commands'))).toBe(false);
+  });
+
+  it('notes missing table cross-references when schema is off, and prints the source reminder for source: all', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ commandDocs: { source: 'all' } }));
+    const { io: cliIo, out } = io();
+    await runGenerate({ dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: agentServer().transport } });
+    expect(out).toContain('Command docs written without table cross-references (schema is off)');
+    expect(out).toContain("Command docs include Blue Yonder product source (commandDocs.source = 'all'); keep them in a private repository.");
+    expect(await readFile(join(dir, 'src/moca-commands/commands/list-orders.md'), 'utf8')).toContain('[select a from widget]');
   });
 });
