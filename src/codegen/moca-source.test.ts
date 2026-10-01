@@ -15,9 +15,9 @@ describe('splitSource', () => {
   });
 
   it('blanks strings and comments inside SQL and handles nested brackets and unterminated blocks', () => {
-    // ' ' + blanked "']'" (3) + ' ' + blanked "-- from fake" (12) = 17 spaces after "y ="
+    // "']'" becomes "?  " (3), then ' ' and blanked "-- from fake" (12): 15 spaces after the "?"
     expect(splitSource("[select x from widget where y = ']' -- from fake\n and z = 1]").sql).toEqual([
-      `select x from widget where y =${' '.repeat(17)}\n and z = 1`,
+      `select x from widget where y = ?${' '.repeat(15)}\n and z = 1`,
     ]);
     expect(splitSource('[select [order] from ord').sql).toEqual(['select [order] from ord']);
   });
@@ -38,6 +38,8 @@ describe('sqlTables', () => {
     ['select a from widget for update', ['widget'], []],
     ['select a from @tbl', [], []],
     ['select @from_dte from widget', ['widget'], []],
+    ['select a from @+tbl', [], []],
+    ['select a from #tmp t, ord', [], []],
   ])('%s', (sql, reads, writes) => {
     expect(sqlTables(sql)).toEqual({ reads, writes });
   });
@@ -59,6 +61,13 @@ describe('commandCalls', () => {
     expect(commandCalls('publish data where name = log widget', trie)).toEqual([]);
   });
 
+  it('does not read variables or operands as commands', () => {
+    const t = buildCommandTrie(['list', 'list widgets', 'create widget']);
+    expect(commandCalls('if (@list = 1) { create widget }', t)).toEqual(['create widget']);
+    expect(commandCalls('publish data where a = 1 and (list = 2)', t)).toEqual([]);
+    expect(commandCalls('(@list = @widgets)', t)).toEqual([]);
+  });
+
   it('handles try/catch/finally and ^ overrides', () => {
     expect(commandCalls('try { create widget } catch (@?) { log widget } finally { ^list widgets }', trie)).toEqual([
       'create widget',
@@ -70,6 +79,23 @@ describe('commandCalls', () => {
 
 describe('scanSource', () => {
   const trie = buildCommandTrie(['list widgets', 'create widget']);
+
+  it('does not read the alias after a quoted identifier as a table', () => {
+    const all = new Set(['widget', 'ord', 'w', 'o']);
+    expect(scanSource('[select a from "widget" w, ord o]', { trie, tables: all })).toEqual({
+      reads: [],
+      writes: [],
+      calls: [],
+    });
+  });
+
+  it('closes Groovy blocks at the matching ]] only', () => {
+    const t = buildCommandTrie(['noop', 'list widgets']);
+    const none = { trie: t, tables: null };
+    expect(scanSource('[[ def x = m[k[0]]; noop ]] | list widgets', none).calls).toEqual(['list widgets']);
+    expect(scanSource("[[ def s = ']]' ]] | list widgets", none).calls).toEqual(['list widgets']);
+    expect(scanSource('[[ def s = 1', none).calls).toEqual([]);
+  });
 
   it('keeps only known tables and ignores strings, comments and Groovy', () => {
     const text =

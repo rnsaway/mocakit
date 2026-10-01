@@ -16,6 +16,26 @@ function skipQuoted(text: string, start: number): number {
   return text.length;
 }
 
+/** End index (after the closing `]]`) of a Groovy block whose body starts at `start`; skips strings, tracks `[ ]` depth. */
+function skipGroovy(text: string, start: number): number {
+  let depth = 0;
+  let j = start;
+  while (j < text.length) {
+    const ch = text[j]!;
+    if (ch === "'" || ch === '"') {
+      j = skipQuoted(text, j);
+      continue;
+    }
+    if (ch === '[') depth++;
+    else if (ch === ']') {
+      if (depth === 0 && text[j + 1] === ']') return j + 2;
+      if (depth > 0) depth--;
+    }
+    j++;
+  }
+  return text.length;
+}
+
 const blank = (text: string): string => text.replace(/[^\n]/g, ' ');
 
 function readSqlBlock(text: string, start: number): { body: string; next: number } {
@@ -26,7 +46,7 @@ function readSqlBlock(text: string, start: number): { body: string; next: number
     const ch = text[j]!;
     if (ch === "'" || ch === '"') {
       const end = skipQuoted(text, j);
-      body += blank(text.slice(j, end));
+      body += '?' + blank(text.slice(j + 1, end));
       j = end;
       continue;
     }
@@ -77,8 +97,7 @@ export function splitSource(text: string): { sql: string[]; moca: string } {
       continue;
     }
     if (ch === '[' && text[i + 1] === '[') {
-      const close = text.indexOf(']]', i + 2);
-      i = close < 0 ? text.length : close + 2;
+      i = skipGroovy(text, i + 2);
       moca += ' ';
       continue;
     }
@@ -117,7 +136,7 @@ function readItem(tokens: string[], k: number): { name?: string; next: number } 
 
 /** Table names read and written by one SQL statement block (lowercased, sorted, de-duplicated). */
 export function sqlTables(sql: string): { reads: string[]; writes: string[] } {
-  const tokens = sql.toLowerCase().match(/@?[a-z_][a-z0-9_$#.]*|[(),;]/g) ?? [];
+  const tokens = sql.toLowerCase().match(/@[+\-?*%]?[a-z0-9_$#.]*|#[a-z0-9_$#.]*|[a-z_][a-z0-9_$#.]*|[(),;?]/g) ?? [];
   const reads = new Set<string>();
   const writes = new Set<string>();
   for (let k = 0; k < tokens.length; k++) {
@@ -180,13 +199,13 @@ export function buildCommandTrie(names: string[]): CommandTrie {
   return { root };
 }
 
-const SEPARATORS = new Set(['|', ';', '&', '{', '}', '(', '^']);
+const SEPARATORS = new Set(['|', ';', '&', '{', '}', '^']);
 const STATEMENT_KEYWORDS = new Set(['if', 'else', 'try', 'catch', 'finally']);
 const WORD = /^[a-z0-9_][a-z0-9_.-]*$/;
 
 /** Command keys called at statement starts in MOCA text (longest match), sorted and de-duplicated. */
 export function commandCalls(moca: string, trie: CommandTrie): string[] {
-  const tokens = moca.toLowerCase().match(/[a-z0-9_][a-z0-9_.-]*|[|;&{}()^]/g) ?? [];
+  const tokens = moca.toLowerCase().match(/@[+\-?*%]?[a-z0-9_.]*|[a-z0-9_][a-z0-9_.-]*|[^\s]/g) ?? [];
   const calls = new Set<string>();
   let atStart = true;
   for (let k = 0; k < tokens.length; k++) {
