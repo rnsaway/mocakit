@@ -26,7 +26,7 @@ export function commandDocFile(key: string): { file: string; encoded: boolean } 
 }
 
 const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
-const noTicks = (text: string): string => oneLine(text).split('`').join('\`');
+const noTicks = (text: string): string => oneLine(text).split('`').join('\\`');
 const cell = (text: string | undefined): string => (text === undefined ? '' : oneLine(text).split('\\').join('\\\\').split('|').join('\\|'));
 
 function fence(source: string): string {
@@ -101,7 +101,7 @@ export function emitCommandDocs(commands: CommandModel[], options: CommandDocsOp
     const { active } = m.info;
     const file = fileOf.get(m.info.name)!;
     const triggerCount = options.triggers && m.triggers.length > 0 ? ` · ${m.triggers.length} ${m.triggers.length === 1 ? 'trigger' : 'triggers'}` : '';
-    const description = active.description !== undefined ? ` · ${oneLine(active.description)}` : '';
+    const description = active.description !== undefined ? ` · ${noTicks(active.description)}` : '';
     index.push(`- [\`${m.info.name}\`](commands/${docHref(file)}) · ${active.level} · ${active.type ?? 'unknown type'}${triggerCount}${description}`);
 
     const lines = [marker, `# ${m.info.name}`, ''];

@@ -129,10 +129,23 @@ describe('emitCommandDocs', () => {
     const active = { level: 'WIDbase', levelSeq: 1, type: 'Local Syntax', description: 'bad ```moca\nstuff' };
     const out = emitCommandDocs([model({ name: 'tick', info: { name: 'tick', key: 'tick', active, overrides: [] } })], base).files;
     const body = out.get('commands/tick.md')!;
-    expect(body).toContain('bad \`\`\`moca stuff');
-    expect(out.get('INDEX.md')).toContain('bad \`\`\`moca stuff');
+    expect(body).toContain('bad \\`\\`\\`moca stuff');
+    expect(out.get('INDEX.md')).toContain('bad \\`\\`\\`moca stuff');
     const before = body.slice(0, body.indexOf('## Arguments'));
     expect(before.split('\n').filter((l) => l.startsWith('```')).length % 2).toBe(0);
+    const lead = { level: 'WIDbase', levelSeq: 1, type: 'Local Syntax', description: '```moca\nrm stuff' };
+    const leadOut = emitCommandDocs([model({ name: 'lead', info: { name: 'lead', key: 'lead', active: lead, overrides: [] } })], base).files;
+    const leadBody = leadOut.get('commands/lead.md')!;
+    expect(leadBody).toContain('\\`\\`\\`moca rm stuff');
+    expect(leadBody.split('\n').filter((l) => l.startsWith('```'))).toEqual([]);
+    expect(leadOut.get('INDEX.md')).toContain('\\`\\`\\`moca rm stuff');
+    const leadBefore = leadBody.slice(0, leadBody.indexOf('## Arguments'));
+    expect(leadBefore.split('\n').filter((l) => l.startsWith('```')).length % 2).toBe(0);
+  });
+
+  it('warns when a literal dash in a command name is encoded', () => {
+    const { warnings: w } = emitCommandDocs([model({ name: 'sl_get x.y-z' })], base);
+    expect(w.some((m) => m.includes('commands/sl_get-x.y%2Dz.md'))).toBe(true);
   });
 
   it('caps long lists and omits table links without schema docs', () => {
