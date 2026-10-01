@@ -1,6 +1,9 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { relativeHref, resolveCodesSettings, resolveCommandDocsSettings } from './command-docs.js';
+import { DOC_MARKER } from '../codegen/docs-writer.js';
+import { readDocumentedCommands, relativeHref, resolveCodesSettings, resolveCommandDocsSettings } from './command-docs.js';
 
 const out = join('/p', 'src', 'moca.generated.ts');
 
@@ -53,5 +56,32 @@ describe('relativeHref', () => {
     expect(relativeHref(join('/p', 'src', 'moca-commands', 'commands'), join('/p', 'src', 'moca-schema', 'tables', 'widget.md'))).toBe(
       '../../moca-schema/tables/widget.md',
     );
+  });
+});
+
+describe('readDocumentedCommands', () => {
+  it('reads command names from a generated INDEX.md, and returns null when it is missing or hand-written', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'mocakit-cmdidx-'));
+    try {
+      expect(await readDocumentedCommands(dir)).toBeNull();
+      await writeFile(
+        join(dir, 'INDEX.md'),
+        [
+          `${DOC_MARKER} 0.4.0 from https://moca.test. Do not edit; regenerate with \`mocakit generate\`. -->`,
+          'notice',
+          '',
+          '# Commands',
+          '',
+          '- [`create widget`](commands/create-widget.md) · WIDbase · C Function',
+          '- [`list widgets`](commands/list-widgets.md) · USRwid · Local Syntax · 2 triggers · Lists `x` widgets',
+          '',
+        ].join('\r\n'),
+      );
+      expect(await readDocumentedCommands(dir)).toEqual(new Set(['create widget', 'list widgets']));
+      await writeFile(join(dir, 'INDEX.md'), '# mine\n- [`list widgets`](commands/list-widgets.md)\n');
+      expect(await readDocumentedCommands(dir)).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

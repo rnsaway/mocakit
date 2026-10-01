@@ -18,9 +18,11 @@ import { redactUrl } from '../util/url.js';
 import { VERSION } from '../version.js';
 import {
   buildCommandModels,
+  commandDocsDir,
   commandHrefFor,
   documentedCommands,
   emitDocumentedCommands,
+  readDocumentedCommands,
   resolveCodesSettings,
   resolveCommandDocsSettings,
 } from './command-docs.js';
@@ -261,10 +263,12 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     warn.print(emitted.warnings);
     let docs: Map<string, string> | null = null;
     if (schema.docs !== null) {
-      const commandHref =
-        commandModels !== null && commandDocs !== null
-          ? commandHrefFor(commandDocs, schema.docs, new Set(commandModels.map((m) => m.info.name)))
-          : undefined;
+      // Link "Used by" names to this run's command docs, or, when none are emitted this run, to those listed
+      // in a previously generated command INDEX.md (so offline / docs-off runs keep the links).
+      const commandsOut = commandDocs?.out ?? commandDocsDir(config, configDir, out);
+      const documented =
+        commandModels !== null ? new Set(commandModels.map((m) => m.info.name)) : await readDocumentedCommands(commandsOut);
+      const commandHref = documented !== null ? commandHrefFor(commandsOut, schema.docs, documented) : undefined;
       const docResult = emitSchemaDocs(filtered, { version: VERSION, commandHref });
       warn.print(docResult.warnings);
       docs = docResult.files;

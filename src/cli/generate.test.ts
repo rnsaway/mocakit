@@ -541,6 +541,30 @@ describe('runGenerate with command docs and codes', () => {
     expect(await readFile(join(dir, 'src/moca-schema/tables/widget.md'), 'utf8')).toContain('Written by');
   });
 
+  it('keeps "Used by" command links in offline and --no-command-docs runs, from the generated command INDEX', async () => {
+    const dir = await tempDir();
+    const tableDoc = join(dir, 'src/moca-schema/tables/widget.md');
+    await runGenerate({ schema: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    const first = await readFile(tableDoc, 'utf8');
+    expect(first).toContain('[`list orders`](../../moca-commands/commands/list-orders.md)');
+
+    await runGenerate({ schema: true, fromSnapshot: 'src/moca.commands.json', dryRun: false, cwd: dir, env: {}, io: io().io });
+    expect(await readFile(tableDoc, 'utf8')).toBe(first);
+
+    await runGenerate({ schema: true, commandDocs: false, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    expect(await readFile(tableDoc, 'utf8')).toBe(first);
+  });
+
+  it('honours a configured commandDocs.out when reading the command INDEX with command docs off', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ commandDocs: { out: 'agent/cmds' } }));
+    await runGenerate({ schema: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    await runGenerate({ schema: true, commandDocs: false, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: agentServer().transport } });
+    expect(await readFile(join(dir, 'src/moca-schema/tables/widget.md'), 'utf8')).toContain(
+      '[`list orders`](../../../agent/cmds/commands/list-orders.md)',
+    );
+  });
+
   it('refuses before writing anything when moca-commands holds a hand-written file', async () => {
     const dir = await tempDir();
     await mkdir(join(dir, 'src/moca-commands'), { recursive: true });
