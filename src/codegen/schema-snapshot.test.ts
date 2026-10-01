@@ -68,4 +68,34 @@ describe('schema snapshot', () => {
     expect(sameSchema(snapshot, { ...snapshot, database: 'oracle' })).toBe(false);
     expect(sameSchema(snapshot, { ...snapshot, tables: [] })).toBe(false);
   });
+
+  const withExtras: SchemaSnapshot = {
+    ...snapshot,
+    codes: { locale: 'US_ENGLISH', columns: [{ column: 'wdgsts', values: [{ value: 'A', short: 'Active' }, { value: 'X' }] }] },
+    usage: [{ table: 'widget', readBy: ['list widgets'], writtenBy: ['create widget'] }],
+  };
+
+  it('round-trips codes and usage, and still reads a 0.3.0 snapshot without them', async () => {
+    const dir = await temp();
+    await writeSchemaSnapshot(join(dir, 'a.json'), withExtras);
+    expect(await readSchemaSnapshot(join(dir, 'a.json'))).toEqual(withExtras);
+    await writeSchemaSnapshot(join(dir, 'b.json'), snapshot);
+    expect((await readSchemaSnapshot(join(dir, 'b.json'))).codes).toBeUndefined();
+  });
+
+  it.each([
+    ['codes without locale', { ...snapshot, codes: { columns: [] } }, /codes/],
+    ['code value not a string', { ...snapshot, codes: { locale: 'X', columns: [{ column: 'c', values: [{ value: 1 }] }] } }, /codes column "c"/],
+    ['usage entry malformed', { ...snapshot, usage: [{ table: 'widget', readBy: 'x', writtenBy: [] }] }, /usage table "widget"/],
+  ])('rejects %s', async (_label, content, message) => {
+    const path = join(await temp(), 's.json');
+    await writeFile(path, JSON.stringify(content));
+    await expect(readSchemaSnapshot(path)).rejects.toThrow(message);
+  });
+
+  it('compares codes and usage', () => {
+    expect(sameSchema(withExtras, { ...withExtras, generatedAt: 'later' })).toBe(true);
+    expect(sameSchema(withExtras, { ...withExtras, usage: [] })).toBe(false);
+    expect(sameSchema(withExtras, { ...withExtras, codes: undefined })).toBe(false);
+  });
 });
