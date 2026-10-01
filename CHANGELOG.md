@@ -4,6 +4,25 @@ All notable changes to mocakit are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/) (while below 1.0.0, a minor version can contain breaking changes).
 
+## [0.4.0] - 2026-10-01
+
+### Added
+
+- **Command docs** (`commandDocs` in the config, or `--command-docs`): `moca-commands/` with `README.md`, `INDEX.md` and one
+  page per command (`commands/<name>.md`) with arguments, implementation, triggers in firing order, and overrides.
+  Implementation source is written only for custom component levels by default (`commandDocs.source`, `customLevels`,
+  `customTriggers`); `source: 'all'` also writes product source, `source: false` none.
+- **Call graph and table cross-reference**: approximate Calls / Called by and Reads / Writes links from scanned command
+  source. The table docs gain a "Used by" section, kept in `moca.schema.json` so offline rebuilds keep it.
+- **Code values** (`schema.codes`): `moca-schema/codes/<column>.md` from `codmst`/`dscmst`, linked from coded columns in
+  the table docs.
+- `--command-docs` and `--no-command-docs` flags. `--from-snapshot` skips command docs.
+
+### Changed
+
+- The generated `README.md` and `INDEX.md` in `moca-schema/` and `moca-commands/` start with a private-repository notice.
+- `writeSchemaDocs` also removes stale generated files in `codes/`.
+
 ## [0.3.0] - 2026-09-30
 
 ### Added
@@ -79,6 +98,7 @@ All notable changes to mocakit are documented here. The format follows
   `MocaArgumentError`) with password redaction, a `MocaOutputs` registry for row types, and date helpers
   (`formatMocaDate`, `parseMocaDate`).
 
+[0.4.0]: https://github.com/rnsaway/mocakit/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rnsaway/mocakit/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rnsaway/mocakit/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rnsaway/mocakit/releases/tag/v0.1.0
