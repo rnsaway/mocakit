@@ -16,14 +16,44 @@ function skipQuoted(text: string, start: number): number {
   return text.length;
 }
 
-/** End index (after the closing `]]`) of a Groovy block whose body starts at `start`; skips strings, tracks `[ ]` depth. */
+/** End index of a Groovy string at `start` (`'…'`, `"…"`, `'''…'''` or `"""…"""`; `\` escapes the next character). */
+function skipGroovyString(text: string, start: number): number {
+  const quote = text[start]!;
+  const triple = text.startsWith(quote.repeat(3), start);
+  const close = triple ? quote.repeat(3) : quote;
+  let j = start + close.length;
+  while (j < text.length) {
+    if (text[j] === '\\') {
+      j += 2;
+      continue;
+    }
+    if (text.startsWith(close, j)) return j + close.length;
+    j++;
+  }
+  return text.length;
+}
+
+/**
+ * End index (after the closing `]]`) of a Groovy block whose body starts at `start`; skips Groovy strings and
+ * `//` / `/* *\/` comments, tracks `[ ]` depth. Unterminated constructs run to the end of the text.
+ */
 function skipGroovy(text: string, start: number): number {
   let depth = 0;
   let j = start;
   while (j < text.length) {
     const ch = text[j]!;
     if (ch === "'" || ch === '"') {
-      j = skipQuoted(text, j);
+      j = skipGroovyString(text, j);
+      continue;
+    }
+    if (ch === '/' && text[j + 1] === '/') {
+      const nl = text.indexOf('\n', j);
+      j = nl < 0 ? text.length : nl;
+      continue;
+    }
+    if (ch === '/' && text[j + 1] === '*') {
+      const end = text.indexOf('*/', j + 2);
+      j = end < 0 ? text.length : end + 2;
       continue;
     }
     if (ch === '[') depth++;

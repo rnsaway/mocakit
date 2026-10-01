@@ -97,6 +97,20 @@ describe('scanSource', () => {
     expect(scanSource('[[ def s = 1', none).calls).toEqual([]);
   });
 
+  it('skips Groovy comments, escaped quotes and triple-quoted strings', () => {
+    const tables = new Set(['widget']);
+    expect(scanSource("[[ // don't do this\n x = 1 ]] | list widgets | [select * from widget]", { trie, tables })).toEqual({
+      reads: ['widget'],
+      writes: [],
+      calls: ['list widgets'],
+    });
+    expect(scanSource("[[ s = 'it\\'s' ]] | list widgets", { trie, tables }).calls).toEqual(['list widgets']);
+    expect(scanSource("[[ /* it's */ x = 1 ]] | create widget", { trie, tables }).calls).toEqual(['create widget']);
+    expect(scanSource("[[ s = '''a ' b''' ]] | list widgets", { trie, tables }).calls).toEqual(['list widgets']);
+    expect(scanSource('[[ s = """a " b""" ]] | list widgets', { trie, tables }).calls).toEqual(['list widgets']);
+    expect(scanSource("[[ s = 'unterminated", { trie, tables }).calls).toEqual([]);
+  });
+
   it('keeps only known tables and ignores strings, comments and Groovy', () => {
     const text =
       "create widget where note = 'select x from ord' | /* update ord */ [select a from widget w, fake_tbl f] | [[ 'delete from ord' ]] | [update widget set a = 1]";
