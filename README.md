@@ -3,6 +3,8 @@
 Typed TypeScript SDK for MOCA servers (Blue Yonder / RedPrairie WMS), plus a generator that turns every active
 MOCA command on your instance into a typed function.
 
+> mocakit is an independent open-source project. It is not affiliated with, sponsored or endorsed by Blue Yonder.
+
 ## Requirements
 
 - Node 20.12+ (the first release with `util.parseEnv`, which the CLI uses to load `.env` files).
@@ -634,3 +636,10 @@ login, to stop waiting on it without cancelling that login for other callers).
 ## License
 
 MIT
+
+## Trademarks
+
+Blue Yonder, JDA, RedPrairie and MOCA are trademarks of their respective owners. They are used here only to
+describe the software mocakit works with. mocakit contains no Blue Yonder code. It talks to MOCA servers that you
+are already licensed to use. Generated files (`moca.schema.*`, `moca-schema/`) can describe your licensed system,
+so keep them in private repositories and treat them under your own agreement with Blue Yonder.
