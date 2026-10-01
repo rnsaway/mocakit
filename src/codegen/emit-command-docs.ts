@@ -60,7 +60,7 @@ export function emitCommandDocs(commands: CommandModel[], options: CommandDocsOp
   const showTrigger = (t: TriggerModel) =>
     options.source === 'all' || (options.source === 'custom' && triggerGlobs.some((re) => re.test(t.name)));
   const productNotice = (def: CommandDefinition) =>
-    `_Source not included (Blue Yonder product level ${def.level}; set commandDocs.source to 'all' to include it under your licence)_`;
+    `_Source not included (Blue Yonder product level ${def.level || 'unknown'}; set commandDocs.source to 'all' to include it under your licence)_`;
   const triggerNotice = "_Source not included (trigger level unknown; add its name to commandDocs.customTriggers or set source to 'all')_";
 
   const warnings: string[] = [];

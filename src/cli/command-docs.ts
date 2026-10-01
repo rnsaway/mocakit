@@ -45,6 +45,12 @@ export function resolveCommandDocsSettings(
   if (options.source !== undefined && options.source !== 'custom' && options.source !== 'all' && options.source !== false) {
     throw new Error("commandDocs.source must be 'custom', 'all' or false");
   }
+  for (const field of ['include', 'exclude', 'levels', 'customLevels', 'customTriggers'] as const) {
+    const value: unknown = options[field];
+    if (value !== undefined && !(Array.isArray(value) && value.every((v) => typeof v === 'string'))) {
+      throw new Error(`commandDocs.${field} must be an array of strings`);
+    }
+  }
   return {
     out: commandDocsDir(config, configDir, out),
     filter: {

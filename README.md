@@ -482,7 +482,7 @@ code values are stored in `moca.schema.json`, so they survive offline rebuilds.
 `-`). Each command page lists:
 
 - description, component level, type and transaction setting, and the arguments table;
-- the implementation: Local Syntax source in a fenced block, or `Java: class.method` / `C: function`;
+- the implementation: Local Syntax source in a fenced block, or ``Java: `<class>.<method>` `` / ``C function: `<name>` ``;
 - triggers in firing order, with sequence and enabled/disabled;
 - **Calls / Called by** and **Reads / Writes** (tables), as links to the documented commands and table pages;
 - every lower-level **Override** with its own level and source.

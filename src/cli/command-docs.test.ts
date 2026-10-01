@@ -37,6 +37,8 @@ describe('resolveCommandDocsSettings', () => {
   it.each([
     [{ commandDocs: 'yes' }, 'config.commandDocs must be true, false or an object'],
     [{ commandDocs: { source: 'some' } }, "commandDocs.source must be 'custom', 'all' or false"],
+    [{ commandDocs: { customLevels: 'USR*' } }, 'commandDocs.customLevels must be an array of strings'],
+    [{ commandDocs: { include: ['list *', 3] } }, 'commandDocs.include must be an array of strings'],
   ])('rejects %j', (config, message) => {
     expect(() => resolveCommandDocsSettings(config as never, undefined, '/p', out)).toThrow(message);
   });

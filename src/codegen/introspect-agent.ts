@@ -108,18 +108,19 @@ function wrap(what: string, setting: string, error: unknown): Error {
 
 export async function readTriggers(client: MocaClient): Promise<TriggerInfo[]> {
   let result;
+  let c;
   try {
     result = await client.exec('list active triggers', { format: 'full' });
+    if (result.rows.length === 0) return [];
+    c = resolveColumns<keyof typeof TRIGGER_COLUMNS>(
+      result.columns.map((col) => col.name),
+      TRIGGER_COLUMNS,
+      ['name', 'command'],
+      'list active triggers',
+    );
   } catch (error) {
     throw wrap('triggers', 'commandDocs.triggers', error);
   }
-  if (result.rows.length === 0) return [];
-  const c = resolveColumns<keyof typeof TRIGGER_COLUMNS>(
-    result.columns.map((col) => col.name),
-    TRIGGER_COLUMNS,
-    ['name', 'command'],
-    'list active triggers',
-  );
   const triggers: TriggerInfo[] = [];
   for (const row of result.rows) {
     const name = str(row, c.name);

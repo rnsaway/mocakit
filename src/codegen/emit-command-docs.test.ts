@@ -55,7 +55,7 @@ const base: CommandDocsOptions = {
 };
 
 describe('commandDocFile', () => {
-  it('turns spaces into underscores and encodes the rest', () => {
+  it('turns spaces into dashes and percent-encodes the rest, including literal dashes', () => {
     expect(commandDocFile('list widgets')).toEqual({ file: 'list-widgets.md', encoded: false });
     expect(commandDocFile('sl_get x.y-z')).toEqual({ file: 'sl_get-x.y%2Dz.md', encoded: true });
     expect(commandDocFile('a b').file).toBe('a-b.md');
@@ -155,6 +155,13 @@ describe('emitCommandDocs', () => {
     const out = emitCommandDocs([many], { ...base, tableHref: undefined }).files.get('commands/big.md')!;
     expect(out).toContain('and 5 more');
     expect(out).toContain('- Reads: `widget`');
+  });
+
+  it('says the product level is unknown when the definition has no level', () => {
+    const active = { level: '', levelSeq: 0, type: 'Local Syntax', source: 'PRODUCT' };
+    const out = emitCommandDocs([model({ name: 'nolevel', info: { name: 'nolevel', key: 'nolevel', active, overrides: [] } })], base)
+      .files.get('commands/nolevel.md')!;
+    expect(out).toContain('_Source not included (Blue Yonder product level unknown; set commandDocs.source');
   });
 
   it('shows tables without a doc as plain names', () => {

@@ -32,7 +32,7 @@ const ARG_COLUMNS = {
 };
 
 const ARGS_BY_COMMAND: CommandSpec = ['list active command arguments', [['command', 'S', 1]]];
-export const TRUE_FLAGS =new Set(['1', 'y', 'yes', 't', 'true']);
+export const TRUE_FLAGS = new Set(['1', 'y', 'yes', 't', 'true']);
 
 export interface IntrospectOptions {
   version: string;

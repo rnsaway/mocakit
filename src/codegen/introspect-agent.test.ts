@@ -64,6 +64,11 @@ describe('readTriggers', () => {
       'Reading triggers failed (MOCA status 511): MOCA command failed with status 511: boom. Set commandDocs.triggers to false to skip them.',
     );
   });
+
+  it('wraps an unrecognised result shape with the same message', async () => {
+    const odd = client(() => mocaXml(0, { columns: [{ name: 'other' }], rows: [['x']] })).client;
+    await expect(readTriggers(odd)).rejects.toThrow(/^Reading triggers failed: .*\. Set commandDocs\.triggers to false to skip them\.$/s);
+  });
 });
 
 describe('readCodes', () => {
