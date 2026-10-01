@@ -640,6 +640,8 @@ MIT
 ## Trademarks
 
 Blue Yonder, JDA, RedPrairie and MOCA are trademarks of their respective owners. They are used here only to
-describe the software mocakit works with. mocakit contains no Blue Yonder code. It talks to MOCA servers that you
-are already licensed to use. Generated files (`moca.schema.*`, `moca-schema/`) can describe your licensed system,
-so keep them in private repositories and treat them under your own agreement with Blue Yonder.
+describe the software mocakit works with. mocakit contains no Blue Yonder source code. It calls standard MOCA
+commands by name (such as `list active commands`) over the same protocol other MOCA clients use, on servers you are
+already licensed to use. The files it generates (`moca.generated.ts`, `moca.commands.json`, `moca.schema.*`,
+`moca-schema/`) describe your licensed Blue Yonder system, so keep them in private repositories and treat them
+under your own agreement with Blue Yonder.
