@@ -55,7 +55,7 @@ export function emitApiDocs(snapshot: ApiSnapshot, options: { version: string })
       '',
       '# REST APIs (for coding agents)',
       '',
-      '- Search `INDEX.md` by tag, path or description, then open `operations/<tag>/<method>.md`.',
+      '- Search `INDEX.md` by tag, path or description, then open `operations/<tag>/<operation>.md`.',
       "- Call with `await moca.api.<tag>.<method>({ path, query, body })`; `{ data: [...] }` responses resolve to the rows, `{ format: 'full' }` gives `{ status, body }`.",
       '- mocakit logs in to the REST API on the first call and reuses the session cookie.',
       '- **POST, PUT, PATCH and DELETE change data immediately.** There is no dry-run or rollback for REST calls; generate with `api.methods: [\'get\']` for a read-only client.',

@@ -547,7 +547,7 @@ export default defineConfig({
 
 `mocakit generate --api` enables it for one run and `--no-api` disables it for one run even if the config enables it
 (using both is an error). `--from-snapshot` rebuilds from `moca.api.json` without contacting the server.
-With no `api` setting and no `--api`, the output is exactly what 0.4.0 wrote.
+With no `api` setting and no `--api`, the output is unchanged: the same as without this feature.
 
 The default group is the server's public one. Naming another group in `groups` opts into its APIs: these are internal
 or unsupported interfaces that may change without notice, so each group is generated under its own name instead of the
@@ -565,20 +565,23 @@ every argument and row comes from the spec's definitions.
 const widgets = await moca.api.widget.getWidgets({ query: { warehouse: 'WH1' } });   // rows: Widget[]
 const one = await moca.api.widget.getWidgetsById({ path: { id: 'W1' } });
 await moca.api.widget.postWidgets({ body: { name: 'New widget' } });               // JSON body
-await moca.api.widget.postWidgetsImport({ form: { file: 'a.csv' } });               // form-encoded body
+await moca.api.widget.postWidgetsImport({ form: { mode: 'replace' } });             // form-encoded body
 
 const { status, body } = await moca.api.widget.getWidgets({}, { format: 'full' });
 ```
 
-Parameters are `path`, `query`, `body` or `form`, typed from the spec. A response of the form `{ data: [...] }` resolves
-to the rows; anything else resolves to the parsed body. `{ format: 'full' }` resolves to `{ status, body }`. Options are
+Parameters are `path`, `query`, `body` or `form`, typed from the spec. When the spec declares a `{ data: [...] }`
+response, the call resolves to the rows; anything else resolves to the parsed body. `{ format: 'full' }` resolves to `{ status, body }`. Options are
 `format`, `signal` and `timeoutMs`. A non-2xx status throws `MocaApiError` with `method`, `path`, `httpStatus` and,
-when the server sent them, `userMessage`, `errorCode` and `responseId`. A `Date` value is rendered as a MOCA date string.
+when the server sent them, `userMessage`, `errorCode` and `responseId`. A `Date` value in a path, query or form
+parameter is rendered as a MOCA date string; inside a JSON `body` it is serialised by `JSON.stringify` (an ISO string).
+`form` values are sent as `application/x-www-form-urlencoded`; multipart/file upload is not supported. A path parameter
+that is missing, empty, `.` or `..` throws `MocaArgumentError` before anything is sent.
 
 ### Sessions & retries
 
 The first call logs in with the client's credentials (`POST /ws/auth/login`) and keeps the session cookie. Concurrent
-first calls share one login, and a 401 triggers one fresh login and one resend. A failed login is never repeated.
+first calls share one login, and a 401 triggers one fresh login and one resend. A failed login is never retried automatically (the next call tries again).
 
 Only `GET` requests are retried (twice, for network errors and 429/502/503/504). **Writes are committed immediately:
 `POST`, `PUT`, `PATCH` and `DELETE` are never retried, and there is no dry-run or rollback for REST calls**, unlike
@@ -586,14 +589,14 @@ Only `GET` requests are retried (twice, for network errors and 429/502/503/504).
 
 ### Agent docs
 
-`moca-api/` contains `README.md`, `INDEX.md` and one page per operation (`operations/<tag>/<method>.md`) with its
+`moca-api/` contains `README.md`, `INDEX.md` and one page per operation (`operations/<tag>/<operation>.md`) with its
 description, permissions (for example `VIEW_WIDGET`), parameters, response fields and a call example, so a coding agent
 can search the index and open one page. Set `api.docs: false` to skip it.
 
 ### Keep it private
 
 `moca-api/`, `moca.api.json` and `moca.api.ts` describe a licensed Blue Yonder system. The generated `README.md` and
-`INDEX.md` open with the private-repository notice, and the files name your server, so do not commit them to a public repository.
+`INDEX.md` open with the private-repository notice, and the files name your server's host, so do not commit them to a public repository.
 A full WMS has several thousand operations: `moca.api.ts` is several megabytes and `moca-api/` is one file per operation,
 so use `include`, `exclude` or `methods` to shrink them.
 
@@ -628,7 +631,7 @@ Everything throws a subclass of `MocaError` (`message`, `status`, `command`, `ar
 | `MocaAuthError` | Login failed, returned no `session_key`, or a second 523 right after re-login | — |
 | `MocaTransportError` | Invalid service URL, credentials embedded in the URL, network, TLS, timeout, abort, redirect, non-2xx HTTP, or empty body | `cause`, `httpStatus?` |
 | `MocaProtocolError` | Response body isn't parseable as `moca-response` | `rawSnippet` |
-| `MocaArgumentError` | Missing required argument, unknown/mis-cased argument, invalid argument name, unrenderable number/`Date`/value, `USR_ID`/`SESSION_KEY` in `opts.env`, a character XML 1.0 forbids in the query or environment, `extraArgs` on `exec` or `batch`, an `autocommit` option (removed in 0.2.0), a non-boolean `dryRun` or `[commit]` in dryRun text, an empty batch, a batch step not built by the batch builder, an `async` batch builder, options passed to a step instead of `batch()`, `noRowsIsError` on a batch, or an invalid client config (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `session.store` with `reuse: false`, `dryRun` in `defaults`) | `argument` |
+| `MocaArgumentError` | Missing required argument, a missing or invalid REST path parameter (empty, `.` or `..`), unknown/mis-cased argument, invalid argument name, unrenderable number/`Date`/value, `USR_ID`/`SESSION_KEY` in `opts.env`, a character XML 1.0 forbids in the query or environment, `extraArgs` on `exec` or `batch`, an `autocommit` option (removed in 0.2.0), a non-boolean `dryRun` or `[commit]` in dryRun text, an empty batch, a batch step not built by the batch builder, an `async` batch builder, options passed to a step instead of `batch()`, `noRowsIsError` on a batch, or an invalid client config (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `session.store` with `reuse: false`, `dryRun` in `defaults`) | `argument` |
 | `MocaApiError` | A REST API call (`moca.api`) returned a non-2xx status | `method`, `path`, `httpStatus`, `userMessage`, `errorCode`, `responseId` |
 
 ```ts

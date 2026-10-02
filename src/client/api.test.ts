@@ -188,3 +188,23 @@ describe('defineApi', () => {
     expect(requests.at(-1)!.url).toBe('https://moca.test/api/widget/v1/widgets');
   });
 });
+
+describe('ApiClient path parameter safety', () => {
+  const NOTES: ApiOperationSpec = ['delete', '/api/widget/v1/widgets/{widget_id}/notes', 'body'];
+
+  it.each(['', '.', '..'])('rejects path value %j before sending anything', async (value) => {
+    const { transport, requests } = server(() => res(200, {}));
+    await expect(ctx(transport).call(NOTES, { path: { widget_id: value } })).rejects.toMatchObject({ name: 'MocaArgumentError' });
+    expect(requests).toHaveLength(0);
+  });
+
+  it.each([
+    ['a.b', 'a.b'],
+    ['..a', '..a'],
+    ['a/..', 'a%2F..'],
+  ])('still allows %j', async (value, encoded) => {
+    const { transport, requests } = server(() => res(200, {}));
+    await ctx(transport).call(NOTES, { path: { widget_id: value } });
+    expect(requests[1]!.url).toBe(`https://moca.test/app/api/widget/v1/widgets/${encoded}/notes`);
+  });
+});

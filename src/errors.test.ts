@@ -144,4 +144,11 @@ describe('MocaApiError', () => {
       'POST /p failed with HTTP 500',
     );
   });
+
+  it('serialises its HTTP details with toJSON', () => {
+    const e = new MocaApiError({ method: 'GET', path: '/p', httpStatus: 404, userMessage: 'Nope', errorCode: 'E2', responseId: 'r-2' });
+    expect(JSON.parse(JSON.stringify(e))).toMatchObject({
+      name: 'MocaApiError', method: 'GET', path: '/p', httpStatus: 404, userMessage: 'Nope', errorCode: 'E2', responseId: 'r-2',
+    });
+  });
 });

@@ -22,17 +22,27 @@ export function identifierFrom(input: string): string {
 const tagShort = (tag: string): string => tag.split(' (')[0] ?? tag;
 const tagVersion = (tag: string): string => (tag.match(/\(([^)]+)\)\s*$/)?.[1] ?? '').trim();
 
+const guardReserved = (key: string): string => (RESERVED.has(key) ? `op${upper(key)}` : key);
+
+/** Identifier for a private group's namespace (reserved-name guarded). */
+export const groupKeyFor = (name: string): string => guardReserved(identifierFrom(name));
+
+/** Distinct (case-insensitively) namespace key per tag; clashes get a version suffix, then `_2`, `_3`… in input order. */
 export function tagKeys(tags: string[]): Map<string, string> {
-  const byShort = new Map<string, string[]>();
-  for (const tag of tags) {
-    const key = identifierFrom(tagShort(tag));
-    byShort.set(key, [...(byShort.get(key) ?? []), tag]);
-  }
+  const unique = [...new Set(tags)];
+  const base = new Map(unique.map((tag) => [tag, guardReserved(identifierFrom(tagShort(tag)))]));
+  const sharing = new Map<string, number>();
+  for (const key of base.values()) sharing.set(key.toLowerCase(), (sharing.get(key.toLowerCase()) ?? 0) + 1);
+  const used = new Set<string>();
   const result = new Map<string, string>();
-  for (const tag of tags) {
-    const key = identifierFrom(tagShort(tag));
-    const clash = new Set(byShort.get(key)).size > 1;
-    result.set(tag, clash ? `${key}${upper(identifierFrom(tagVersion(tag) || 'x'))}` : key);
+  for (const tag of unique) {
+    const key = base.get(tag)!;
+    const version = tagVersion(tag);
+    const candidate = sharing.get(key.toLowerCase())! > 1 && version !== '' ? `${key}${upper(identifierFrom(version))}` : key;
+    let final = candidate;
+    for (let n = 2; used.has(final.toLowerCase()); n++) final = `${candidate}_${n}`;
+    used.add(final.toLowerCase());
+    result.set(tag, final);
   }
   return result;
 }
@@ -122,7 +132,7 @@ export function normalizeSwagger(
     }
   }
   const keys = tagKeys([...allTags]);
-  const groupKey = identifierFrom(group.name);
+  const groupKey = groupKeyFor(group.name);
   const operations: Omit<ApiOperation, 'name'>[] = [];
   const warnings: string[] = [];
   for (const [path, item] of Object.entries(paths)) {
@@ -191,23 +201,24 @@ export function normalizeSwagger(
 
 export function assignOperationNames(operations: Omit<ApiOperation, 'name'>[]): { operations: ApiOperation[]; warnings: string[] } {
   const sorted = [...operations].sort((a, b) => byCodeUnit(a.tagKey, b.tagKey) || byCodeUnit(a.path, b.path) || byCodeUnit(a.method, b.method));
-  const groups = new Map<string, Omit<ApiOperation, 'name'>[]>();
+  const groups = new Map<string, { key: string; items: { op: Omit<ApiOperation, 'name'>; base: string }[] }>();
   const named: ApiOperation[] = [];
   for (const op of sorted) {
     // Tag short name: strips a leading '/<tag>/' segment when present (private-group tags rarely match and are left alone).
     let base = operationName(op.method, op.path, op.tag.split(' (')[0]!);
     if (RESERVED.has(base)) base = `op${upper(base)}`;
-    const key = `${op.tagKey}.${base}`;
-    const list = groups.get(key) ?? [];
-    list.push(op);
-    groups.set(key, list);
-    named.push({ ...op, name: list.length === 1 ? base : `${base}_${list.length}` });
+    // Case-insensitive: Windows/macOS file systems would map getAb and getAB to one docs file.
+    const folded = `${op.tagKey.toLowerCase()}.${base.toLowerCase()}`;
+    const entry = groups.get(folded) ?? { key: `${op.tagKey}.${base}`, items: [] };
+    entry.items.push({ op, base });
+    groups.set(folded, entry);
+    named.push({ ...op, name: entry.items.length === 1 ? base : `${base}_${entry.items.length}` });
   }
-  const warnings = [...groups.entries()]
-    .filter(([, list]) => list.length > 1)
-    .map(([key, list]) => {
-      const names = list.map((_, i) => (i === 0 ? key.split('.')[1]! : `${key.split('.')[1]}_${i + 1}`));
-      return `API operations ${list.map((o) => `${o.method.toUpperCase()} ${o.path}`).join(', ')} map to the same name ${key}; generated ${names.join(', ')}`;
+  const warnings = [...groups.values()]
+    .filter((g) => g.items.length > 1)
+    .map(({ key, items }) => {
+      const names = items.map((it, i) => (i === 0 ? it.base : `${it.base}_${i + 1}`));
+      return `API operations ${items.map((it) => `${it.op.method.toUpperCase()} ${it.op.path}`).join(', ')} map to the same name ${key}; generated ${names.join(', ')}`;
     });
   return { operations: named, warnings };
 }

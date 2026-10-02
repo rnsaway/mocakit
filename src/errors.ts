@@ -176,4 +176,16 @@ export class MocaApiError extends MocaError {
     this.errorCode = info.errorCode;
     this.responseId = info.responseId;
   }
+
+  override toJSON(): ReturnType<MocaError['toJSON']> & Pick<MocaApiErrorInfo, 'method' | 'path' | 'httpStatus' | 'userMessage' | 'errorCode' | 'responseId'> {
+    return {
+      ...super.toJSON(),
+      method: this.method,
+      path: this.path,
+      httpStatus: this.httpStatus,
+      userMessage: this.userMessage,
+      errorCode: this.errorCode,
+      responseId: this.responseId,
+    };
+  }
 }

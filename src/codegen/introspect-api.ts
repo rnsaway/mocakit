@@ -74,6 +74,18 @@ export async function introspectApi(options: {
       allDefinitions[defName] ??= schema;
     }
   }
+  // Private group keys share the docs folder namespace with public tag keys; keep them distinct case-insensitively.
+  const taken = new Set(unnamed.filter((o) => !groups.some((g) => g.name === o.group && g.private)).map((o) => o.tagKey.toLowerCase()));
+  for (const group of groups.filter((g) => g.private)) {
+    const key = unnamed.find((o) => o.group === group.name)?.tagKey;
+    if (key === undefined) continue;
+    let final = key;
+    for (let n = 2; taken.has(final.toLowerCase()); n++) final = `${key}_${n}`;
+    taken.add(final.toLowerCase());
+    if (final === key) continue;
+    for (let i = 0; i < unnamed.length; i++) if (unnamed[i]!.group === group.name) unnamed[i] = { ...unnamed[i]!, tagKey: final };
+    warnings.push(`API group "${group.name}" key "${key}" collides with another API key; using "${final}"`);
+  }
   const named = assignOperationNames(unnamed);
   warnings.push(...named.warnings);
   const operations = named.operations.sort((a, b) => byCodeUnit(a.tagKey, b.tagKey) || byCodeUnit(a.path, b.path) || byCodeUnit(a.method, b.method));

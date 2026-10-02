@@ -40,6 +40,42 @@ describe('identifiers and names', () => {
   });
 });
 
+describe('case-insensitive uniqueness and reserved keys', () => {
+  it('suffixes operation names that differ only by case', () => {
+    const base = { group: 'Public APIs', tag: 'widget (v1)', tagKey: 'widget', permissions: [], parameters: [], fullPath: '' };
+    const { operations, warnings } = assignOperationNames([
+      { ...base, method: 'get', path: '/widget/v1/aB' },
+      { ...base, method: 'get', path: '/widget/v1/Ab' },
+    ]);
+    expect(operations.map((o) => o.name)).toEqual(['getAb', 'getAB_2']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('generated getAb, getAB_2');
+  });
+
+  it('makes tag keys distinct case-insensitively', () => {
+    const keys = [...tagKeys(['foobar', 'fooBar']).values()];
+    expect(new Set(keys.map((k) => k.toLowerCase())).size).toBe(2);
+  });
+
+  it('keeps tag keys distinct when versions are missing or repeated', () => {
+    for (const tags of [['gizmo', 'gizmo (v1)'], ['gizmo (v1)', 'gizmo (v1) '], ['gizmo (a)', 'gizmo (A)']]) {
+      const keys = [...tagKeys(tags).values()];
+      expect(new Set(keys.map((k) => k.toLowerCase())).size).toBe(tags.length);
+    }
+  });
+
+  it('guards reserved tag keys', () => {
+    expect(tagKeys(['then']).get('then')).toBe('opThen');
+    expect(tagKeys(['constructor']).get('constructor')).toBe('opConstructor');
+    expect(tagKeys(['toString']).get('toString')).toBe('opToString');
+  });
+
+  it('guards reserved private group keys', () => {
+    const spec = { swagger: '2.0', paths: { '/a': { get: { responses: {} } } } };
+    expect(normalizeSwagger({ name: 'constructor', private: true }, spec).operations[0]!.tagKey).toBe('opConstructor');
+  });
+});
+
 describe('convertSchema', () => {
   it('converts types, refs, arrays, enums, objects and unknowns', () => {
     expect(convertSchema({ type: 'string', format: 'date-time' })).toEqual({ kind: 'string', format: 'date-time' });

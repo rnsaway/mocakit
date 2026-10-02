@@ -123,7 +123,12 @@ export class ApiClient {
     const path = fullPath.replace(/\{([^}]+)\}/g, (_m, name: string) => {
       const value = params.path?.[name];
       if (value === undefined || value === null) throw new MocaArgumentError(`Missing path parameter "${name}" for ${label}`, name);
-      return encodeURIComponent(scalar(value));
+      const text = scalar(value);
+      // new URL() collapses dot segments, which would silently retarget the request.
+      if (text === '' || text === '.' || text === '..') {
+        throw new MocaArgumentError(`Invalid path parameter "${name}" for ${label}: must not be empty, "." or ".."`, name);
+      }
+      return encodeURIComponent(text);
     });
     const url = new URL(path.replace(/^\//, ''), this.#base);
     for (const [key, value] of Object.entries(params.query ?? {})) {

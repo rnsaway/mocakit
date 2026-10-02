@@ -61,6 +61,14 @@ describe('introspectApi', () => {
     expect(snapshot.groups[1]).toEqual({ name: 'gizmo', basePath: '', private: true });
   });
 
+  it('suffixes a private group key that collides (case-insensitively) with a public tag key', async () => {
+    const clashing = { ...publicSpec, paths: { '/gizmo/v1/things': { get: { tags: ['Gizmo (v1)'], responses: {} } } } };
+    const { transport } = fake({ '/app/api/api-docs/v2': () => json(200, clashing) });
+    const { snapshot, warnings } = await introspectApi({ ...base, groups: ['Public APIs', 'gizmo'], transport });
+    expect(snapshot.operations.map((o) => `${o.tagKey}.${o.name}`).sort()).toEqual(['gizmo.getThings', 'gizmo_2.getGizmos']);
+    expect(warnings).toEqual([expect.stringContaining('gizmo_2')]);
+  });
+
   it('rejects unknown groups with the available names', async () => {
     await expect(introspectApi({ ...base, groups: ['nope'], transport: fake().transport })).rejects.toThrow(
       'Unknown API group "nope"; available: Public APIs, gizmo',
