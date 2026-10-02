@@ -5,8 +5,10 @@ describe('public API', () => {
   it('exports the runtime surface', () => {
     expect(Object.keys(mocakit).sort()).toEqual(
       [
+        'ApiClient',
         'MOCA_STATUS',
         'MemorySessionStore',
+        'MocaApiError',
         'MocaArgumentError',
         'MocaAuthError',
         'MocaClient',
@@ -15,9 +17,11 @@ describe('public API', () => {
         'MocaProtocolError',
         'MocaTransportError',
         'VERSION',
+        'defineApi',
         'defineCommands',
         'defineConfig',
         'formatMocaDate',
+        'httpRestTransport',
         'httpTransport',
         'isMocaStatus',
         'parseMocaDate',

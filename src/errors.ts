@@ -147,3 +147,45 @@ export class MocaArgumentError extends MocaError {
 export function isMocaStatus(error: unknown, status: number): error is MocaError {
   return error instanceof MocaError && error.status === status;
 }
+
+export interface MocaApiErrorInfo {
+  method: string;
+  path: string;
+  httpStatus: number;
+  userMessage: string | null;
+  errorCode: string | null;
+  responseId: string | null;
+}
+
+/** A REST API call that the server answered with a non-2xx status. */
+export class MocaApiError extends MocaError {
+  override readonly name = 'MocaApiError' as const;
+  readonly method: string;
+  readonly path: string;
+  readonly httpStatus: number;
+  readonly userMessage: string | null;
+  readonly errorCode: string | null;
+  readonly responseId: string | null;
+
+  constructor(info: MocaApiErrorInfo, options: { cause?: unknown } = {}) {
+    super(`${info.method} ${info.path} failed with HTTP ${info.httpStatus}${info.userMessage ? `: ${info.userMessage}` : ''}`, options);
+    this.method = info.method;
+    this.path = info.path;
+    this.httpStatus = info.httpStatus;
+    this.userMessage = info.userMessage;
+    this.errorCode = info.errorCode;
+    this.responseId = info.responseId;
+  }
+
+  override toJSON(): ReturnType<MocaError['toJSON']> & Pick<MocaApiErrorInfo, 'method' | 'path' | 'httpStatus' | 'userMessage' | 'errorCode' | 'responseId'> {
+    return {
+      ...super.toJSON(),
+      method: this.method,
+      path: this.path,
+      httpStatus: this.httpStatus,
+      userMessage: this.userMessage,
+      errorCode: this.errorCode,
+      responseId: this.responseId,
+    };
+  }
+}

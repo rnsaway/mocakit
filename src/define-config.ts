@@ -38,6 +38,23 @@ export interface CommandDocsConfig {
   triggers?: boolean;
 }
 
+/** Opt-in typed REST API client and docs from the server's Swagger specs. */
+export interface ApiConfig {
+  /** Groups from /ws/admin/publicApis. Default ['Public APIs']. Other groups are internal. */
+  groups?: string[];
+  /** Tag key globs (e.g. 'inventory', 'pick*'), case-insensitive. */
+  include?: string[];
+  exclude?: string[];
+  /** HTTP methods to generate. Default all; ['get'] gives a read-only client. */
+  methods?: Array<'get' | 'post' | 'put' | 'delete' | 'patch'>;
+  /** Default moca.api.json next to `out`. */
+  snapshot?: string;
+  /** Default moca.api.ts next to `out`. */
+  out?: string;
+  /** Agent docs folder. Default moca-api next to `out`; false skips it. */
+  docs?: string | false;
+}
+
 export interface MocakitConfig {
   /** Falls back to the MOCA_URL environment variable. */
   url?: string;
@@ -63,6 +80,8 @@ export interface MocakitConfig {
   schema?: boolean | SchemaConfig;
   /** `true` or an object enables command docs (moca-commands/); see `CommandDocsConfig`. Default off. */
   commandDocs?: boolean | CommandDocsConfig;
+  /** `true` or an object enables the REST API client; see `ApiConfig`. Default off. */
+  api?: boolean | ApiConfig;
 }
 
 export function defineConfig(config: MocakitConfig): MocakitConfig {

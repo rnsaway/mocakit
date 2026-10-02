@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MocaArgumentError,
+  MocaApiError,
   MocaAuthError,
   MocaCommandError,
   MocaError,
@@ -131,5 +132,23 @@ describe('errors', () => {
     expect(new MocaTransportError('x')).toBeInstanceOf(MocaError);
     expect(new MocaProtocolError('x', '<a>')).toBeInstanceOf(MocaError);
     expect(new MocaArgumentError('x')).toBeInstanceOf(MocaError);
+  });
+});
+
+describe('MocaApiError', () => {
+  it('carries HTTP details and a readable message', () => {
+    const e = new MocaApiError({ method: 'GET', path: '/api/widget/v1/widgets', httpStatus: 422, userMessage: 'Bad wh_id', errorCode: 'E1', responseId: 'r-1' });
+    expect(e.message).toBe('GET /api/widget/v1/widgets failed with HTTP 422: Bad wh_id');
+    expect(e).toMatchObject({ name: 'MocaApiError', httpStatus: 422, userMessage: 'Bad wh_id', errorCode: 'E1', responseId: 'r-1', status: -1 });
+    expect(new MocaApiError({ method: 'POST', path: '/p', httpStatus: 500, userMessage: null, errorCode: null, responseId: null }).message).toBe(
+      'POST /p failed with HTTP 500',
+    );
+  });
+
+  it('serialises its HTTP details with toJSON', () => {
+    const e = new MocaApiError({ method: 'GET', path: '/p', httpStatus: 404, userMessage: 'Nope', errorCode: 'E2', responseId: 'r-2' });
+    expect(JSON.parse(JSON.stringify(e))).toMatchObject({
+      name: 'MocaApiError', method: 'GET', path: '/p', httpStatus: 404, userMessage: 'Nope', errorCode: 'E2', responseId: 'r-2',
+    });
   });
 });

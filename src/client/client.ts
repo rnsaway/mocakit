@@ -6,6 +6,7 @@ import { parseResponse, type RawResponse } from '../protocol/response.js';
 import { SessionManager } from '../session/session-manager.js';
 import { MemorySessionStore, sessionCacheKey, sharedSessionStore, type SessionState } from '../session/store.js';
 import { httpTransport, type Transport } from '../transport/http.js';
+import type { RestTransport } from '../transport/rest.js';
 import type {
   BatchOptions,
   CallOptions,
@@ -33,6 +34,17 @@ const MAX_TIMEOUT_MS = 2_147_483_647;
 export interface MocaClientDeps {
   transport?: Transport;
   now?: () => number;
+  /** HTTP transport for moca.api REST calls (tests use a fake). */
+  restTransport?: RestTransport;
+}
+
+const contexts = new WeakMap<MocaClient, { config: MocaConfig; deps: MocaClientDeps }>();
+
+/** Internal: the config and deps a client was created with (used by generated REST APIs). */
+export function clientContext(client: MocaClient): { config: MocaConfig; deps: MocaClientDeps } {
+  const context = contexts.get(client);
+  if (context === undefined) throw new Error('Not a MocaClient');
+  return context;
 }
 
 interface ResolvedOptions {
@@ -173,6 +185,7 @@ export class MocaClient {
       login: async () => (await this.#login()).state,
       now: this.#now,
     });
+    contexts.set(this, { config, deps });
   }
 
   /**
