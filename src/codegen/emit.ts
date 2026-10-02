@@ -10,6 +10,8 @@ export interface EmitOptions {
   importFrom?: string;
   /** Specifier of the generated `moca.schema.ts` (e.g. `./moca.schema.js`); types `from()` when set. */
   schemaImport?: string;
+  /** Specifier of the generated moca.api.ts (e.g. ./moca.api.js); adds moca.api when set. */
+  apiImport?: string;
 }
 
 export interface EmitResult {
@@ -256,6 +258,9 @@ export function emit(snapshot: Snapshot, options: EmitOptions): EmitResult {
   if (options.schemaImport !== undefined) {
     lines.splice(lines.length - 1, 0, `import type { MocaTableName, MocaTables } from ${str(options.schemaImport)};`);
   }
+  if (options.apiImport !== undefined) {
+    lines.splice(lines.length - 1, 0, `import { API, type MocaApi } from ${str(options.apiImport)};`);
+  }
 
   lines.push(
     commands.length === 0
@@ -290,7 +295,12 @@ export function emit(snapshot: Snapshot, options: EmitOptions): EmitResult {
       '  from<T extends MocaTableName>(table: T): mk.Query<MocaTables[T]>;',
     );
   }
-  lines.push('}', '', 'export class Moca extends mk.MocaClient {}', 'mk.defineCommands(Moca.prototype, S);', '');
+  if (options.apiImport !== undefined) {
+    lines.push("  /** Typed REST APIs from the server's Swagger specs: `moca.api.<tag>.<method>(...)`. */", '  readonly api: MocaApi;');
+  }
+  lines.push('}', '', 'export class Moca extends mk.MocaClient {}', 'mk.defineCommands(Moca.prototype, S);');
+  if (options.apiImport !== undefined) lines.push('mk.defineApi(Moca.prototype, API);');
+  lines.push('');
 
   lines.push(
     'export function createMoca(config: mk.MocaConfig, deps?: mk.MocaClientDeps): Moca {',

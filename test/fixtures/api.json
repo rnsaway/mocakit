@@ -1,0 +1,26 @@
+{
+  "mocakitVersion": "0.5.0",
+  "generatedAt": "2026-10-01T00:00:00.000Z",
+  "server": "https://moca.test/service",
+  "groups": [{ "name": "Public APIs", "basePath": "/api", "private": false }],
+  "operations": [
+    {
+      "group": "Public APIs", "tag": "widget (v1)", "tagKey": "widget", "method": "get", "path": "/widget/v1/widgets", "fullPath": "/api/widget/v1/widgets",
+      "name": "getWidgets", "description": "Lists widgets", "permissions": ["VIEW_WIDGET"],
+      "parameters": [
+        { "in": "query", "name": "wh_id", "required": true, "schema": { "kind": "string" } },
+        { "in": "query", "name": "status", "required": false, "schema": { "kind": "string", "enum": ["A", "X"] } }
+      ],
+      "response": { "envelope": "data", "schema": { "kind": "ref", "name": "widget.v1.Widget" } }
+    },
+    {
+      "group": "Public APIs", "tag": "widget (v1)", "tagKey": "widget", "method": "post", "path": "/widget/v1/widgetMove", "fullPath": "/api/widget/v1/widgetMove",
+      "name": "postWidgetMove", "permissions": ["MOVE_WIDGET"], "parameters": [],
+      "body": { "required": true, "schema": { "kind": "object", "properties": { "wh_id": { "kind": "string" }, "qty": { "kind": "number", "integer": true } }, "required": ["wh_id"] } },
+      "response": { "envelope": "body", "schema": { "kind": "object", "properties": { "moved": { "kind": "number", "integer": true } }, "required": [] } }
+    }
+  ],
+  "definitions": {
+    "widget.v1.Widget": { "kind": "object", "properties": { "widget_id": { "kind": "string" }, "qty": { "kind": "number", "integer": true } }, "required": ["widget_id"] }
+  }
+}
