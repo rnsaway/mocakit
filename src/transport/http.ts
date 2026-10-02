@@ -23,13 +23,13 @@ export type Transport = (request: TransportRequest) => Promise<string>;
 
 let insecureAgent: Agent | undefined;
 
-function dispatcherFor(ignoreSslIssues: boolean): Agent | undefined {
+export function dispatcherFor(ignoreSslIssues: boolean): Agent | undefined {
   if (!ignoreSslIssues) return undefined;
   insecureAgent ??= new Agent({ connect: { rejectUnauthorized: false } });
   return insecureAgent;
 }
 
-function networkFailureMessage(safeUrl: string, error: unknown): string {
+export function networkFailureMessage(safeUrl: string, error: unknown): string {
   const cause = error instanceof Error ? error.cause : undefined;
   if (cause !== null && typeof cause === 'object') {
     const code = 'code' in cause ? String((cause as { code?: unknown }).code) : undefined;
