@@ -72,6 +72,8 @@ describe('RESERVED_MEMBERS', () => {
     expect(toMethodBase('from')).toBe('cmdFrom');
   });
 
+  it('reserves api', () => expect(toMethodBase('api')).toBe('cmdApi'));
+
   it('covers every own property name of MocaClient.prototype', () => {
     for (const name of Object.getOwnPropertyNames(MocaClient.prototype)) {
       expect(RESERVED_MEMBERS.has(name)).toBe(true);

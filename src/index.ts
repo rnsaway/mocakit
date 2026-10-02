@@ -1,5 +1,16 @@
 import type { MocaRow } from './types.js';
 
+export {
+  ApiClient,
+  defineApi,
+  type ApiCallOptions,
+  type ApiFullOptions,
+  type ApiFullResult,
+  type ApiOperationSpec,
+  type ApiParams,
+  type ApiRowsOptions,
+  type ApiSpecTable,
+} from './client/api.js';
 export { MOCA_STATUS, MocaClient, type MocaClientDeps } from './client/client.js';
 export {
   defineCommands,
@@ -12,6 +23,7 @@ export type { Query, QueryFilter, QueryRowsOptions } from './client/query.js';
 export { formatMocaDate, parseMocaDate } from './dates/codec.js';
 export { defineConfig, type CommandDocsConfig, type MocakitConfig, type SchemaConfig } from './define-config.js';
 export {
+  MocaApiError,
   MocaArgumentError,
   MocaAuthError,
   MocaCommandError,
@@ -22,6 +34,7 @@ export {
 } from './errors.js';
 export { MemorySessionStore, sharedSessionStore, type SessionState, type SessionStore } from './session/store.js';
 export { httpTransport, type Transport, type TransportRequest } from './transport/http.js';
+export { httpRestTransport, type RestRequest, type RestResponse, type RestTransport } from './transport/rest.js';
 export type {
   ArgSpec,
   BatchOptions,
