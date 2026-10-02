@@ -573,7 +573,9 @@ const { status, body } = await moca.api.widget.getWidgets({}, { format: 'full' }
 Parameters are `path`, `query`, `body` or `form`, typed from the spec. When the spec declares a `{ data: [...] }`
 response, the call resolves to the rows; anything else resolves to the parsed body. `{ format: 'full' }` resolves to `{ status, body }`. Options are
 `format`, `signal` and `timeoutMs`. A non-2xx status throws `MocaApiError` with `method`, `path`, `httpStatus` and,
-when the server sent them, `userMessage`, `errorCode` and `responseId`. A `Date` value in a path, query or form
+when the server sent them, `userMessage`, `errorCode` and `responseId`. One exception: the server answers an empty
+list with HTTP 404 "no rows affected", so a GET that returns rows resolves to `[]` in that case (`{ status: 404,
+body: { data: [] } }` with `format: 'full'`). Any other 404, and that 404 for a write, still throws. A `Date` value in a path, query or form
 parameter is rendered as a MOCA date string; inside a JSON `body` it is serialised by `JSON.stringify` (an ISO string).
 `form` values are sent as `application/x-www-form-urlencoded`; multipart/file upload is not supported. A path parameter
 that is missing, empty, `.` or `..` throws `MocaArgumentError` before anything is sent.

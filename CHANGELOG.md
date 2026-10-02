@@ -10,7 +10,8 @@ All notable changes to mocakit are documented here. The format follows
 
 - **REST API client** (`api` in the config, or `--api`): `mocakit generate` reads the server's Swagger specs and adds a
   typed `moca.api.<tag>.<method>(...)` to the generated client, with `path`, `query`, `body` and `form` parameters typed
-  from the spec. Responses resolve to the rows (`{ format: 'full' }` gives `{ status, body }`). The session is a lazy
+  from the spec. Responses resolve to the rows (`{ format: 'full' }` gives `{ status, body }`), and the server's
+  404 "no rows affected" for an empty list resolves to `[]`. The session is a lazy
   cookie login with one re-login after a 401; only `GET` requests are retried, and writes are never retried.
 - **`moca.api.json`, `moca.api.ts` and `moca-api/`**: the spec snapshot, the typed operation table and definitions, and
   agent docs (`README.md`, `INDEX.md` and one page per operation). Options: `groups`, `include`, `exclude`,

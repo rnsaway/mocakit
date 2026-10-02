@@ -36,6 +36,7 @@ export interface ApiClientContext {
 
 const SESSION_COOKIE = 'MOCA-WS-SESSIONKEY';
 const GET_RETRY_DELAYS = [500, 1500];
+const NO_ROWS = /^\s*no rows affected\.?\s*$/i;
 
 function scalar(value: unknown): string {
   if (value instanceof Date) return formatMocaDate(value);
@@ -194,6 +195,10 @@ export class ApiClient {
     if (response.status < 200 || response.status >= 300) {
       const info = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
       const first = Array.isArray(info.errors) && typeof info.errors[0] === 'object' && info.errors[0] !== null ? (info.errors[0] as Record<string, unknown>) : {};
+      // The server answers an empty list with 404 "no rows affected"; for a GET list that is just no rows.
+      if (method === 'get' && envelope === 'data' && response.status === 404 && typeof first.userMessage === 'string' && NO_ROWS.test(first.userMessage)) {
+        return opts.format === 'full' ? { status: response.status, body: { data: [] } } : [];
+      }
       throw new MocaApiError({
         method: method.toUpperCase(),
         path: fullPath,

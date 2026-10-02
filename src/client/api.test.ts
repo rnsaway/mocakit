@@ -151,6 +151,23 @@ describe('ApiClient', () => {
     expect(await ctx(transport).call(GET_WIDGETS, { path: { widget_id: 'a' } }, { format: 'full' })).toEqual({ status: 200, body: { data: [{ a: 1 }] } });
   });
 
+  it('resolves a GET list answered with 404 "no rows affected" to no rows', async () => {
+    const noRows = (message: string) => res(404, { timestamp: 't', errors: [{ errorCode: null, userMessage: message }], responseId: 'r-1' });
+    const { transport } = server(() => noRows('no rows affected'));
+    expect(await ctx(transport).call(GET_WIDGETS, { path: { widget_id: 'a' } })).toEqual([]);
+    expect(await ctx(transport).call(GET_WIDGETS, { path: { widget_id: 'a' } }, { format: 'full' })).toEqual({ status: 404, body: { data: [] } });
+    expect(await ctx(server(() => noRows(' No rows affected. ')).transport).call(GET_WIDGETS, { path: { widget_id: 'a' } })).toEqual([]);
+  });
+
+  it('still raises other 404s, and no-rows 404s for writes or non-list operations', async () => {
+    const noRows = res(404, { errors: [{ userMessage: 'no rows affected' }] });
+    const other = server(() => res(404, { errors: [{ userMessage: 'Widget not found' }] }));
+    await expect(ctx(other.transport).call(GET_WIDGETS, { path: { widget_id: 'a' } })).rejects.toMatchObject({ httpStatus: 404, userMessage: 'Widget not found' });
+    await expect(ctx(server(() => res(404, '')).transport).call(GET_WIDGETS, { path: { widget_id: 'a' } })).rejects.toBeInstanceOf(MocaApiError);
+    await expect(ctx(server(() => noRows).transport).call(['delete', '/api/widget/v1/widgets', 'data'])).rejects.toMatchObject({ httpStatus: 404 });
+    await expect(ctx(server(() => noRows).transport).call(['get', '/api/widget/v1/summary', 'body'])).rejects.toMatchObject({ httpStatus: 404 });
+  });
+
   it('raises MocaApiError with server details and never leaks credentials', async () => {
     const { transport } = server(() => res(422, { errors: [{ errorCode: 'E9', userMessage: 'Bad wh_id' }], responseId: 'r-9' }));
     const error = (await ctx(transport).call(GET_WIDGETS, { path: { widget_id: 'a' } }).catch((e: unknown) => e)) as MocaApiError;
