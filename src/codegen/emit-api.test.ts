@@ -39,6 +39,10 @@ describe('helpers', () => {
   it('names definition types (ruling P4)', () => {
     expect([...defTypeNames(['cws.v2.A', 'cws_v2_A', 'B'])]).toEqual([['cws.v2.A', 'Def_cws_v2_A'], ['cws_v2_A', 'Def_cws_v2_A_2'], ['B', 'Def_B']]);
   });
+  it('never assigns the same type name twice', () => {
+    const map = defTypeNames(['x.A', 'x_A', 'x_A_2']);
+    expect([...map.values()]).toEqual(['Def_x_A', 'Def_x_A_2', 'Def_x_A_2_2']);
+  });
   it('renders schema types', () => {
     const defs = new Map([['W', 'Def_W']]);
     expect(tsApiType({ kind: 'string', enum: ['A', "B'"] }, defs)).toBe('"A" | "B\'"');

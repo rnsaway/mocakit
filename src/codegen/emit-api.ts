@@ -23,12 +23,13 @@ export function filterOperations(ops: ApiOperation[], filter: ApiFilter): ApiOpe
 
 export function defTypeNames(names: string[]): Map<string, string> {
   const result = new Map<string, string>();
-  const used = new Map<string, number>();
+  const taken = new Set<string>();
   for (const name of names) {
     const base = `Def_${name.replace(/[^A-Za-z0-9_$]/g, '_')}`;
-    const n = (used.get(base) ?? 0) + 1;
-    used.set(base, n);
-    result.set(name, n === 1 ? base : `${base}_${n}`);
+    let candidate = base;
+    for (let n = 2; taken.has(candidate); n++) candidate = `${base}_${n}`;
+    taken.add(candidate);
+    result.set(name, candidate);
   }
   return result;
 }
