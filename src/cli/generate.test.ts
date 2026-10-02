@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fakeMoca, loginOk, mocaXml, type FakeRequest } from '../../test/helpers/fake-moca.js';
 import { SQLSERVER_COLUMNS, SQLSERVER_KEYS } from '../codegen/introspect-schema.js';
+import type { RestRequest, RestResponse } from '../transport/rest.js';
 import { moduleSpecifier, resolveSchemaSettings, runGenerate } from './generate.js';
 
 const fixture = fileURLToPath(new URL('../../test/fixtures/snapshot.json', import.meta.url));
@@ -602,5 +603,69 @@ describe('runGenerate with command docs and codes', () => {
     expect(out).toContain('Command docs written without table cross-references (schema is off)');
     expect(out).toContain("Command docs include Blue Yonder product source (commandDocs.source = 'all'); keep them in a private repository.");
     expect(await readFile(join(dir, 'src/moca-commands/commands/list-orders.md'), 'utf8')).toContain('[select a from widget]');
+  });
+});
+
+function restServer(overrides: { spec?: () => RestResponse } = {}) {
+  const requests: RestRequest[] = [];
+  const json = (status: number, body: unknown): RestResponse => ({ status, headers: {}, setCookies: [], body: JSON.stringify(body) });
+  const restTransport = async (req: RestRequest): Promise<RestResponse> => {
+    requests.push(req);
+    const path = new URL(req.url).pathname;
+    if (path.endsWith('/ws/admin/publicApis')) return json(200, [{ name: 'Public APIs', url: '/api/api-docs/v2' }]);
+    if (path.endsWith('/api/api-docs/v2')) {
+      return overrides.spec?.() ?? json(200, {
+        swagger: '2.0', basePath: '/api',
+        paths: { '/widget/v1/widgets': { get: { tags: ['widget (v1)'], 'x-permissions': ['VIEW_WIDGET'], responses: { 200: { schema: { type: 'object', properties: { data: { type: 'array', items: { type: 'object', properties: { widget_id: { type: 'string' } } } } } } } } } } },
+      });
+    }
+    return json(404, {});
+  };
+  return { restTransport, requests };
+}
+
+describe('runGenerate with the REST API', () => {
+  const env = { MOCA_URL: 'https://moca.test/service', MOCA_USER: 'u', MOCA_PASSWORD: 'p' };
+
+  it('writes the API snapshot, moca.api.ts, docs and a client with moca.api', async () => {
+    const dir = await tempDir();
+    const rest = restServer();
+    const { io: cliIo, out } = io();
+    await runGenerate({ api: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: schemaServer().transport, restTransport: rest.restTransport } });
+    expect(JSON.parse(await readFile(join(dir, 'src/moca.api.json'), 'utf8')).operations).toHaveLength(1);
+    expect(await readFile(join(dir, 'src/moca.api.ts'), 'utf8')).toContain('getWidgets');
+    expect(await readFile(join(dir, 'src/moca.generated.ts'), 'utf8')).toContain('import { API, type MocaApi } from "./moca.api.js";');
+    expect(await exists(join(dir, 'src/moca-api/operations/widget/getWidgets.md'))).toBe(true);
+    expect(out).toContain('Read 1 API groups (1 operations)');
+    expect(out).toContain(`Wrote 1 API operations to ${join(dir, 'src/moca.api.ts')}`);
+    expect(rest.requests.every((r) => r.method === 'GET')).toBe(true);
+  });
+
+  it('is fully off by default: no REST requests, no new log lines, client unchanged', async () => {
+    const dir = await tempDir();
+    const rest = restServer();
+    const { io: cliIo, out } = io();
+    await runGenerate({ dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: schemaServer().transport, restTransport: rest.restTransport } });
+    expect(rest.requests).toEqual([]);
+    expect(out.some((l) => l.includes('API'))).toBe(false);
+    expect(await readFile(join(dir, 'src/moca.generated.ts'), 'utf8')).not.toContain('MocaApi');
+  });
+
+  it('writes nothing when a spec fetch fails', async () => {
+    const dir = await tempDir();
+    const rest = restServer({ spec: () => ({ status: 403, headers: {}, setCookies: [], body: '{}' }) });
+    await expect(
+      runGenerate({ api: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: schemaServer().transport, restTransport: rest.restTransport } }),
+    ).rejects.toThrow('Fetching API spec "Public APIs" failed (HTTP 403)');
+    for (const f of ['src/moca.commands.json', 'src/moca.generated.ts', 'src/moca.api.json']) expect(await exists(join(dir, f))).toBe(false);
+  });
+
+  it('rebuilds offline from moca.api.json and errors clearly when it is missing', async () => {
+    const dir = await tempDir();
+    await expect(runGenerate({ api: true, fromSnapshot: fixture, dryRun: false, cwd: dir, env: {}, io: io().io })).rejects.toThrow(/API is enabled but .* does not exist/);
+    await runGenerate({ api: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: schemaServer().transport, restTransport: restServer().restTransport } });
+    const before = await readFile(join(dir, 'src/moca.api.ts'), 'utf8');
+    await runGenerate({ api: true, fromSnapshot: join(dir, 'src/moca.commands.json'), dryRun: false, cwd: dir, env: {}, io: io().io });
+    expect(await readFile(join(dir, 'src/moca.api.ts'), 'utf8')).toBe(before);
   });
 });

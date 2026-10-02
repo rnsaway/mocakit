@@ -4,6 +4,11 @@ import { isDeepStrictEqual } from 'node:util';
 import { MocaClient, type MocaClientDeps } from '../client/client.js';
 import type { MocakitConfig, SchemaConfig } from '../define-config.js';
 import type { CommandModel } from '../codegen/agent-model.js';
+import { introspectApi } from '../codegen/introspect-api.js';
+import { sameApi, writeApiSnapshot, type ApiSnapshot } from '../codegen/api-snapshot.js';
+import { emitApi, filterOperations } from '../codegen/emit-api.js';
+import { emitApiDocs } from '../codegen/emit-api-docs.js';
+import { httpRestTransport } from '../transport/rest.js';
 import { checkDocsTargets, writeDocs } from '../codegen/docs-writer.js';
 import { readCodes, readTriggers, type TriggerInfo } from '../codegen/introspect-agent.js';
 import { emit } from '../codegen/emit.js';
@@ -26,6 +31,7 @@ import {
   resolveCodesSettings,
   resolveCommandDocsSettings,
 } from './command-docs.js';
+import { apiDocsManagedDirs, readApiSnapshotFile, resolveApiSettings } from './api-step.js';
 import { loadConfig, resolveConnection } from './load-config.js';
 
 export interface CliIo {
@@ -41,6 +47,8 @@ export interface GenerateOptions {
   schema?: boolean;
   /** `true` = --command-docs, `false` = --no-command-docs, `undefined` = the config decides. */
   commandDocs?: boolean;
+  /** `true` = --api, `false` = --no-api, `undefined` = the config decides. */
+  api?: boolean;
   dryRun: boolean;
   /** Print every warning instead of the first `MAX_PRINTED_WARNINGS` and a count. */
   verbose?: boolean;
@@ -152,6 +160,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   const schema = resolveSchemaSettings(config, options.schema, configDir, out);
   const commandDocs = resolveCommandDocsSettings(config, options.commandDocs, configDir, out);
   const codesSettings = resolveCodesSettings(config, schema !== null);
+  const api = resolveApiSettings(config, options.api, configDir, out);
 
   if (!options.dryRun) {
     // Fail fast, before contacting the server, if an output directory can't be created.
@@ -163,6 +172,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     const dirs = [
       ...(schema === null ? [] : [dirname(schema.snapshot), dirname(schema.out), ...(schema.docs === null ? [] : [schema.docs])]),
       ...(commandDocs !== null && options.fromSnapshot === undefined ? [commandDocs.out] : []),
+      ...(api === null ? [] : [dirname(api.snapshot), dirname(api.out), ...(api.docs === null ? [] : [api.docs])]),
     ];
     for (const dir of dirs) {
       try {
@@ -228,6 +238,26 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     }
   }
 
+  let apiSnapshot: ApiSnapshot | null = null;
+  if (api !== null) {
+    if (options.fromSnapshot !== undefined) {
+      apiSnapshot = await readApiSnapshotFile(api.snapshot);
+    } else {
+      const connection = resolveConnection(config, env);
+      const result = await introspectApi({
+        url: connection.url,
+        ignoreSslIssues: connection.ignoreSslIssues ?? false,
+        timeoutMs: connection.timeoutMs,
+        groups: api.groups,
+        version: VERSION,
+        transport: options.deps?.restTransport ?? httpRestTransport,
+      });
+      apiSnapshot = result.snapshot;
+      warn.print(result.warnings);
+      io.log(`Read ${api.groups.length} API groups (${apiSnapshot.operations.length} operations)`);
+    }
+  }
+
   let commandModels: CommandModel[] | null = null;
   if (commandDocs !== null && commandRows !== undefined) {
     const tables = schemaSnapshot !== null ? new Set(schemaSnapshot.tables.map((t) => t.name)) : null;
@@ -250,7 +280,11 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
 
   const commands = filterCommands(snapshot.commands, config);
   const schemaImport = schema !== null && schemaSnapshot !== null ? moduleSpecifier(out, schema.out) : undefined;
-  const { code, warnings, count } = emit({ ...snapshot, commands }, { version: VERSION, schemaImport });
+  const { code, warnings, count } = emit({ ...snapshot, commands }, {
+    version: VERSION,
+    schemaImport,
+    apiImport: api !== null && apiSnapshot !== null ? moduleSpecifier(out, api.out) : undefined,
+  });
   warn.print(warnings);
 
   let schemaOutput: { code: string; count: number; docs: Map<string, string> | null } | null = null;
@@ -286,6 +320,19 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     warn.print(emitted.warnings);
     commandDocsFiles = emitted.files;
   }
+  let apiOutput: { code: string; count: number; docs: Map<string, string> | null } | null = null;
+  if (api !== null && apiSnapshot !== null) {
+    const filtered = { ...apiSnapshot, operations: filterOperations(apiSnapshot.operations, api.filter) };
+    const emitted = emitApi(filtered, { version: VERSION });
+    warn.print(emitted.warnings);
+    let docs: Map<string, string> | null = null;
+    if (api.docs !== null) {
+      const docResult = emitApiDocs(filtered, { version: VERSION });
+      warn.print(docResult.warnings);
+      docs = docResult.files;
+    }
+    apiOutput = { code: emitted.code, count: emitted.count, docs };
+  }
   warn.finish();
 
   // Every docs target must pass the hand-written-file check before anything is written.
@@ -294,6 +341,9 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   }
   if (!options.dryRun && commandDocs !== null && commandDocsFiles !== null) {
     await checkDocsTargets(commandDocs.out, commandDocsFiles, 'commandDocs.out');
+  }
+  if (!options.dryRun && api !== null && api.docs !== null && apiOutput?.docs) {
+    await checkDocsTargets(api.docs, apiOutput.docs, 'api.docs');
   }
 
   if (options.fromSnapshot === undefined) {
@@ -321,6 +371,19 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
           throw new Error(`Cannot write ${schema.snapshot}: ${errorDetail(error)}`);
         }
         io.log(`Wrote schema snapshot of ${schemaSnapshot.tables.length} tables (${columns} columns) to ${schema.snapshot}`);
+      }
+    }
+    if (api !== null && apiSnapshot !== null) {
+      const existingApi = await readApiSnapshotFile(api.snapshot).catch(() => null);
+      if (existingApi !== null && sameApi(existingApi, apiSnapshot)) {
+        if (!options.dryRun) io.log(`API snapshot unchanged: ${api.snapshot}`);
+      } else if (!options.dryRun) {
+        try {
+          await writeApiSnapshot(api.snapshot, apiSnapshot);
+        } catch (error) {
+          throw new Error(`Cannot write ${api.snapshot}: ${errorDetail(error)}`);
+        }
+        io.log(`Wrote API snapshot of ${apiSnapshot.operations.length} operations to ${api.snapshot}`);
       }
     }
   }
@@ -360,5 +423,26 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       if (result.removed.length > 0) io.log(`Removed ${result.removed.length} stale command docs from ${commandDocs.out}`);
     }
     io.log(`${verb} ${count} command docs to ${commandDocs.out}`);
+  }
+
+  if (api !== null && apiOutput !== null) {
+    if (!options.dryRun) {
+      try {
+        await writeFile(api.out, apiOutput.code, 'utf8');
+      } catch (error) {
+        throw new Error(`Cannot write ${api.out}: ${errorDetail(error)}`);
+      }
+    }
+    io.log(`${verb} ${apiOutput.count} API operations to ${api.out}`);
+    if (api.docs !== null && apiOutput.docs !== null) {
+      if (!options.dryRun) {
+        const result = await writeDocs(api.docs, apiOutput.docs, {
+          setting: 'api.docs',
+          managedDirs: await apiDocsManagedDirs(api.docs, apiOutput.docs),
+        });
+        if (result.removed.length > 0) io.log(`Removed ${result.removed.length} stale API docs from ${api.docs}`);
+      }
+      io.log(`${verb} ${apiOutput.count} API docs to ${api.docs}`);
+    }
   }
 }

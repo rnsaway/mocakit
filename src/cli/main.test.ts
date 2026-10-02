@@ -297,4 +297,10 @@ describe('runCli .env loading', () => {
     expect(out.join('\n')).toContain('--command-docs');
     expect(out.join('\n')).toContain('--no-command-docs');
   });
+
+  it('rejects --api together with --no-api', async () => {
+    const { io: cliIo, err } = capture();
+    expect(await runCli(['generate', '--api', '--no-api'], cliIo, await tempDir())).toBe(1);
+    expect(err).toContain('mocakit: --api and --no-api cannot be used together');
+  });
 });
