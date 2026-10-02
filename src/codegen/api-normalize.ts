@@ -27,7 +27,7 @@ const guardReserved = (key: string): string => (RESERVED.has(key) ? `op${upper(k
 /** Identifier for a private group's namespace (reserved-name guarded). */
 export const groupKeyFor = (name: string): string => guardReserved(identifierFrom(name));
 
-/** Distinct (case-insensitively) namespace key per tag; clashes get a version suffix, then `_2`, `_3`… in input order. */
+/** Distinct (case-insensitively) namespace key per tag; clashes get a version suffix, then `_2`, `_3`... in input order. */
 export function tagKeys(tags: string[]): Map<string, string> {
   const unique = [...new Set(tags)];
   const base = new Map(unique.map((tag) => [tag, guardReserved(identifierFrom(tagShort(tag)))]));
