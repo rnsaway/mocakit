@@ -130,4 +130,53 @@ describe('normalizeSwagger', () => {
     const { operations } = assignOperationNames(normalized.operations);
     expect(Object.keys(reachableDefinitions(operations, normalized.definitions)).sort()).toEqual(['widget.v1.Part', 'widget.v1.Widget']);
   });
+
+  it('lets operation-level parameters replace path-level ones', () => {
+    const result = normalizeSwagger({ name: 'Public APIs', private: false }, {
+      swagger: '2.0',
+      paths: {
+        '/widget/v1/widgets/{widget_id}': {
+          parameters: [{ in: 'path', name: 'widget_id', type: 'string', required: true }],
+          get: { tags: ['widget (v1)'], parameters: [{ in: 'path', name: 'widget_id', type: 'string', required: true, description: 'Widget id' }], responses: {} },
+        },
+      },
+    });
+    expect(result.operations[0]!.parameters).toEqual([
+      { in: 'path', name: 'widget_id', required: true, schema: { kind: 'string' }, description: 'Widget id' },
+    ]);
+  });
+
+  it('resolves parameter and response refs', () => {
+    const result = normalizeSwagger({ name: 'Public APIs', private: false }, {
+      swagger: '2.0',
+      parameters: { whId: { in: 'query', name: 'wh_id', type: 'string', required: true } },
+      responses: { Ok: { schema: { type: 'object', properties: { id: { type: 'string' } } } } },
+      paths: {
+        '/widget/v1/x': {
+          get: { tags: ['widget (v1)'], parameters: [{ $ref: '#/parameters/whId' }], responses: { 200: { $ref: '#/responses/Ok' } } },
+        },
+      },
+    });
+    const op = result.operations[0]!;
+    expect(op.parameters).toEqual([{ in: 'query', name: 'wh_id', required: true, schema: { kind: 'string' } }]);
+    expect(op.response).toEqual({ envelope: 'body', schema: { kind: 'object', properties: { id: { kind: 'string' } }, required: [] } });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('warns on unresolved refs', () => {
+    const result = normalizeSwagger({ name: 'Public APIs', private: false }, {
+      swagger: '2.0',
+      paths: {
+        '/widget/v1/x': {
+          get: { tags: ['widget (v1)'], parameters: [{ $ref: '#/parameters/missing' }], responses: { 200: { $ref: '#/responses/gone' } } },
+        },
+      },
+    });
+    expect(result.operations[0]!.parameters).toEqual([]);
+    expect(result.operations[0]!.response).toBeUndefined();
+    expect(result.warnings).toEqual([
+      'API operation GET /widget/v1/x: unresolved parameter $ref #/parameters/missing',
+      'API operation GET /widget/v1/x: unresolved response $ref #/responses/gone',
+    ]);
+  });
 });

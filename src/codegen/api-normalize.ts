@@ -86,6 +86,23 @@ function parameterSchema(p: Record<string, unknown>): ApiSchema {
   return p.schema !== undefined ? convertSchema(p.schema) : convertSchema({ ...p, description: undefined });
 }
 
+/** Resolves a one-level `$ref` into spec.parameters / spec.responses; non-refs pass through. Unresolved refs warn and yield undefined. */
+function resolveRef(
+  entry: unknown,
+  prefix: string,
+  table: unknown,
+  what: string,
+  label: string,
+  warnings: string[],
+): Record<string, unknown> | undefined {
+  if (!isObject(entry)) return undefined;
+  if (typeof entry.$ref !== 'string') return entry;
+  const target = entry.$ref.startsWith(prefix) && isObject(table) ? table[entry.$ref.slice(prefix.length)] : undefined;
+  if (isObject(target)) return target;
+  warnings.push(`API operation ${label}: unresolved ${what} $ref ${entry.$ref}`);
+  return undefined;
+}
+
 export function normalizeSwagger(
   group: { name: string; private: boolean },
   spec: unknown,
@@ -107,6 +124,7 @@ export function normalizeSwagger(
   const keys = tagKeys([...allTags]);
   const groupKey = identifierFrom(group.name);
   const operations: Omit<ApiOperation, 'name'>[] = [];
+  const warnings: string[] = [];
   for (const [path, item] of Object.entries(paths)) {
     if (!isObject(item)) continue;
     for (const method of API_METHODS) {
@@ -115,15 +133,21 @@ export function normalizeSwagger(
       const tag = Array.isArray(op.tags) && typeof op.tags[0] === 'string' ? op.tags[0] : group.name;
       const parameters: ApiParameter[] = [];
       let body: ApiOperation['body'];
-      for (const raw of [...(Array.isArray(item.parameters) ? item.parameters : []), ...(Array.isArray(op.parameters) ? op.parameters : [])]) {
-        if (!isObject(raw) || typeof raw.name !== 'string') continue;
+      const label = `${method.toUpperCase()} ${path}`;
+      const merged = new Map<string, Record<string, unknown>>();
+      for (const entry of [...(Array.isArray(item.parameters) ? item.parameters : []), ...(Array.isArray(op.parameters) ? op.parameters : [])]) {
+        const raw = resolveRef(entry, '#/parameters/', spec.parameters, 'parameter', label, warnings);
+        if (raw === undefined || typeof raw.name !== 'string') continue;
+        merged.set(`${String(raw.in)}:${raw.name}`, raw); // operation-level replaces path-level, first-seen order kept
+      }
+      for (const raw of merged.values()) {
         const description = text(raw.description);
         if (raw.in === 'body') {
           body = { required: raw.required === true, schema: convertSchema(raw.schema), ...(description !== undefined && { description }) };
         } else if (raw.in === 'query' || raw.in === 'path' || raw.in === 'formData') {
           parameters.push({
             in: raw.in,
-            name: raw.name,
+            name: String(raw.name),
             required: raw.required === true || raw.in === 'path',
             schema: parameterSchema(raw),
             ...(description !== undefined && { description }),
@@ -132,7 +156,8 @@ export function normalizeSwagger(
       }
       const responses = isObject(op.responses) ? op.responses : {};
       const okKey = Object.keys(responses).filter((k) => /^2\d\d$/.test(k)).sort()[0];
-      const okSchema = okKey !== undefined && isObject(responses[okKey]) ? (responses[okKey] as Record<string, unknown>).schema : undefined;
+      const okResponse = okKey !== undefined ? resolveRef(responses[okKey], '#/responses/', spec.responses, 'response', label, warnings) : undefined;
+      const okSchema = okResponse?.schema;
       let response: ApiOperation['response'];
       if (okSchema !== undefined) {
         const converted = convertSchema(okSchema);
@@ -161,7 +186,7 @@ export function normalizeSwagger(
   }
   const definitions: Record<string, ApiSchema> = {};
   for (const [name, schema] of Object.entries(isObject(spec.definitions) ? spec.definitions : {})) definitions[name] = convertSchema(schema);
-  return { group: { name: group.name, basePath, private: group.private }, operations, definitions, warnings: [] };
+  return { group: { name: group.name, basePath, private: group.private }, operations, definitions, warnings };
 }
 
 export function assignOperationNames(operations: Omit<ApiOperation, 'name'>[]): { operations: ApiOperation[]; warnings: string[] } {
