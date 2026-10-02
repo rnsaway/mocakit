@@ -519,6 +519,84 @@ and your custom source all end up in these files, so do not commit them to a pub
 A full WMS has roughly 10,000 commands, so `moca-commands/` is about 10,000 files (on the order of ten megabytes of
 text). Later runs rewrite only the files that changed. Use `commandDocs.include`, `exclude` or `levels` to shrink it.
 
+## REST APIs (moca.api)
+
+Besides MOCA commands, a WMS serves REST APIs described by Swagger specs. `mocakit generate` can read those specs and
+add a typed `moca.api.<tag>.<method>(...)` to the generated client. It is opt-in and needs a live server.
+
+### Enabling it
+
+```ts
+// mocakit.config.ts
+import { defineConfig } from 'mocakit';
+
+export default defineConfig({
+  out: 'src/moca.generated.ts',
+  api: true,   // or an object with any of these options (defaults shown):
+  // api: {
+  //   groups: ['Public APIs'],      // spec groups to read; any other group is an internal API (see below)
+  //   include: ['*'],               // tag-key globs, case-insensitive; default all
+  //   exclude: [],
+  //   methods: ['get', 'post', 'put', 'delete', 'patch'],   // ['get'] gives a read-only client
+  //   snapshot: 'src/moca.api.json',  // default: next to `out`
+  //   out: 'src/moca.api.ts',         // default: next to `out`
+  //   docs: 'src/moca-api',           // default: moca-api next to `out`; false skips the agent docs
+  // },
+});
+```
+
+`mocakit generate --api` enables it for one run and `--no-api` disables it for one run even if the config enables it
+(using both is an error). `--from-snapshot` rebuilds from `moca.api.json` without contacting the server.
+With no `api` setting and no `--api`, the output is exactly what 0.4.0 wrote.
+
+The default group is the server's public one. Naming another group in `groups` opts into its APIs: these are internal
+or unsupported interfaces that may change without notice, so each group is generated under its own name instead of the
+tags inside it.
+
+Names come from the spec. The tag (`widget (v1)`) becomes the group on `moca.api` (`widget`), and the HTTP method
+plus the path after the tag and version becomes the method: `GET /widget/v1/widgets` is
+`moca.api.widget.getWidgets()` and `GET /widget/v1/widgets/{id}` is `getWidgetsById`. If two tags share a short name
+the version is appended (`widgetV1`, `widgetV2`); a name that would repeat gets a `_2` suffix. The type of
+every argument and row comes from the spec's definitions.
+
+### Calling
+
+```ts
+const widgets = await moca.api.widget.getWidgets({ query: { warehouse: 'WH1' } });   // rows: Widget[]
+const one = await moca.api.widget.getWidgetsById({ path: { id: 'W1' } });
+await moca.api.widget.postWidgets({ body: { name: 'New widget' } });               // JSON body
+await moca.api.widget.postWidgetsImport({ form: { file: 'a.csv' } });               // form-encoded body
+
+const { status, body } = await moca.api.widget.getWidgets({}, { format: 'full' });
+```
+
+Parameters are `path`, `query`, `body` or `form`, typed from the spec. A response of the form `{ data: [...] }` resolves
+to the rows; anything else resolves to the parsed body. `{ format: 'full' }` resolves to `{ status, body }`. Options are
+`format`, `signal` and `timeoutMs`. A non-2xx status throws `MocaApiError` with `method`, `path`, `httpStatus` and,
+when the server sent them, `userMessage`, `errorCode` and `responseId`. A `Date` value is rendered as a MOCA date string.
+
+### Sessions & retries
+
+The first call logs in with the client's credentials (`POST /ws/auth/login`) and keeps the session cookie. Concurrent
+first calls share one login, and a 401 triggers one fresh login and one resend. A failed login is never repeated.
+
+Only `GET` requests are retried (twice, for network errors and 429/502/503/504). **Writes are committed immediately:
+`POST`, `PUT`, `PATCH` and `DELETE` are never retried, and there is no dry-run or rollback for REST calls**, unlike
+`moca.batch()` and `dryRun`. Pass `methods: ['get']` to generate a client that cannot write.
+
+### Agent docs
+
+`moca-api/` contains `README.md`, `INDEX.md` and one page per operation (`operations/<tag>/<method>.md`) with its
+description, permissions (for example `VIEW_WIDGET`), parameters, response fields and a call example, so a coding agent
+can search the index and open one page. Set `api.docs: false` to skip it.
+
+### Keep it private
+
+`moca-api/`, `moca.api.json` and `moca.api.ts` describe a licensed Blue Yonder system. The generated `README.md` and
+`INDEX.md` open with the private-repository notice, and the files name your server, so do not commit them to a public repository.
+A full WMS has several thousand operations: `moca.api.ts` is several megabytes and `moca-api/` is one file per operation,
+so use `include`, `exclude` or `methods` to shrink them.
+
 ## Response format
 
 With the default `format: 'rows'`, a call resolves to `T[]`, one plain object per row, with keys exactly as MOCA
@@ -551,6 +629,7 @@ Everything throws a subclass of `MocaError` (`message`, `status`, `command`, `ar
 | `MocaTransportError` | Invalid service URL, credentials embedded in the URL, network, TLS, timeout, abort, redirect, non-2xx HTTP, or empty body | `cause`, `httpStatus?` |
 | `MocaProtocolError` | Response body isn't parseable as `moca-response` | `rawSnippet` |
 | `MocaArgumentError` | Missing required argument, unknown/mis-cased argument, invalid argument name, unrenderable number/`Date`/value, `USR_ID`/`SESSION_KEY` in `opts.env`, a character XML 1.0 forbids in the query or environment, `extraArgs` on `exec` or `batch`, an `autocommit` option (removed in 0.2.0), a non-boolean `dryRun` or `[commit]` in dryRun text, an empty batch, a batch step not built by the batch builder, an `async` batch builder, options passed to a step instead of `batch()`, `noRowsIsError` on a batch, or an invalid client config (blank credentials, bad `timeoutMs`/`maxAgeMinutes`, `session.store` with `reuse: false`, `dryRun` in `defaults`) | `argument` |
+| `MocaApiError` | A REST API call (`moca.api`) returned a non-2xx status | `method`, `path`, `httpStatus`, `userMessage`, `errorCode`, `responseId` |
 
 ```ts
 import { isMocaStatus } from 'mocakit';

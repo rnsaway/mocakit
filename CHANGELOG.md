@@ -4,6 +4,25 @@ All notable changes to mocakit are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/) (while below 1.0.0, a minor version can contain breaking changes).
 
+## [0.5.0] - 2026-10-01
+
+### Added
+
+- **REST API client** (`api` in the config, or `--api`): `mocakit generate` reads the server's Swagger specs and adds a
+  typed `moca.api.<tag>.<method>(...)` to the generated client, with `path`, `query`, `body` and `form` parameters typed
+  from the spec. Responses resolve to the rows (`{ format: 'full' }` gives `{ status, body }`). The session is a lazy
+  cookie login with one re-login after a 401; only `GET` requests are retried, and writes are never retried.
+- **`moca.api.json`, `moca.api.ts` and `moca-api/`**: the spec snapshot, the typed operation table and definitions, and
+  agent docs (`README.md`, `INDEX.md` and one page per operation). Options: `groups`, `include`, `exclude`,
+  `methods` (`['get']` for a read-only client), `snapshot`, `out`, `docs`.
+- `--api` and `--no-api` flags. `--from-snapshot` rebuilds the API output from `moca.api.json`.
+- `MocaApiError` (`method`, `path`, `httpStatus`, `userMessage`, `errorCode`, `responseId`) and the `RestTransport` type
+  for injecting a fake REST transport in tests.
+
+### Changed
+
+- `api` is now a reserved method name: a MOCA command called `api` is generated as `cmdApi`.
+
 ## [0.4.0] - 2026-10-01
 
 ### Added
@@ -98,6 +117,7 @@ All notable changes to mocakit are documented here. The format follows
   `MocaArgumentError`) with password redaction, a `MocaOutputs` registry for row types, and date helpers
   (`formatMocaDate`, `parseMocaDate`).
 
+[0.5.0]: https://github.com/rnsaway/mocakit/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rnsaway/mocakit/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rnsaway/mocakit/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rnsaway/mocakit/compare/v0.1.0...v0.2.0
