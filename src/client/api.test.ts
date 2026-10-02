@@ -67,6 +67,39 @@ describe('ApiClient', () => {
     expect(requests.filter((r) => r.url.endsWith('/ws/auth/login'))).toHaveLength(2);
   });
 
+  it('a stale 401 that clears the cookie never blanks the session of a newer login', async () => {
+    const clear = ['MOCA-WS-SESSIONKEY=; Max-Age=0; Path=/'];
+    const seen = new Set<string>();
+    const retried: (string | undefined)[] = [];
+    const { transport, requests } = server(async (req) => {
+      if (!seen.has(req.url)) {
+        seen.add(req.url);
+        // The second call's 401 arrives after the first call's re-login has completed.
+        if (req.url.endsWith('/b')) await new Promise((resolve) => setTimeout(resolve, 20));
+        return res(401, {}, clear);
+      }
+      retried.push(req.headers?.cookie);
+      return res(200, { data: [{ ok: 1 }] });
+    });
+    const client = ctx(transport);
+    const results = await Promise.all([client.call(GET_WIDGETS, { path: { widget_id: 'a' } }), client.call(GET_WIDGETS, { path: { widget_id: 'b' } })]);
+    expect(results).toEqual([[{ ok: 1 }], [{ ok: 1 }]]);
+    expect(requests.filter((r) => r.url.endsWith('/ws/auth/login'))).toHaveLength(2);
+    expect(retried).toHaveLength(2);
+    for (const cookie of retried) expect(cookie).toContain('MOCA-WS-SESSIONKEY=abc123');
+  });
+
+  it('removes a cookie the server deletes', async () => {
+    let n = 0;
+    const { transport, requests } = server(() => (++n === 1 ? res(200, { data: [] }, ['__cf_bm=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/']) : res(200, { data: [] })));
+    const client = ctx(transport);
+    await client.call(GET_WIDGETS, { path: { widget_id: 'a' } });
+    await client.call(GET_WIDGETS, { path: { widget_id: 'a' } });
+    const calls = requests.filter((r) => !r.url.endsWith('/ws/auth/login'));
+    expect(calls[0]!.headers?.cookie).toBe('MOCA-WS-SESSIONKEY=abc123; __cf_bm=cf1');
+    expect(calls[1]!.headers?.cookie).toBe('MOCA-WS-SESSIONKEY=abc123');
+  });
+
   it('retries GETs on transient failures but never retries a write', async () => {
     const flaky = server((_r, n) => (n === 1 ? res(503) : res(200, { data: [{ ok: 1 }] })));
     expect(await ctx(flaky.transport).call(GET_WIDGETS, { path: { widget_id: 'a' } })).toEqual([{ ok: 1 }]);

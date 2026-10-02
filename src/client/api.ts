@@ -42,6 +42,24 @@ function scalar(value: unknown): string {
   return String(value);
 }
 
+/** True for a cookie that asks to be removed: Max-Age <= 0 or an Expires in the past. */
+function isExpired(attrs: string[]): boolean {
+  for (const attr of attrs) {
+    const eq = attr.indexOf('=');
+    if (eq < 0) continue;
+    const key = attr.slice(0, eq).trim().toLowerCase();
+    const value = attr.slice(eq + 1).trim();
+    if (key === 'max-age') {
+      const seconds = Number(value);
+      if (Number.isFinite(seconds) && seconds <= 0) return true;
+    } else if (key === 'expires') {
+      const at = Date.parse(value);
+      if (Number.isFinite(at) && at < Date.now()) return true;
+    }
+  }
+  return false;
+}
+
 export class ApiClient {
   readonly #ctx: ApiClientContext;
   readonly #base: string;
@@ -55,9 +73,13 @@ export class ApiClient {
 
   #absorb(response: RestResponse, into: Map<string, string> = this.#cookies): void {
     for (const cookie of response.setCookies) {
-      const [pair] = cookie.split(';');
+      const [pair, ...attrs] = cookie.split(';');
       const eq = pair!.indexOf('=');
-      if (eq > 0) into.set(pair!.slice(0, eq).trim(), pair!.slice(eq + 1).trim());
+      if (eq <= 0) continue;
+      const name = pair!.slice(0, eq).trim();
+      const value = pair!.slice(eq + 1).trim();
+      if (value === '' || isExpired(attrs)) into.delete(name);
+      else into.set(name, value);
     }
   }
 
@@ -122,16 +144,18 @@ export class ApiClient {
 
     // Only the transport call is retried. Login happens outside, so a failed login is never repeated.
     const send = async (): Promise<RestResponse> => {
+      // Use the jar the request was sent with, so a stale response never touches a newer login's jar.
+      const jar = this.#cookies;
       const response = await this.#ctx.transport({
         method: method.toUpperCase(),
         url: url.href,
-        headers: { ...headers, cookie: [...this.#cookies].map(([k, v]) => `${k}=${v}`).join('; ') },
+        headers: { ...headers, cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') },
         body,
         timeoutMs: opts.timeoutMs ?? this.#ctx.timeoutMs,
         ignoreSslIssues: this.#ctx.ignoreSslIssues,
         signal: opts.signal,
       });
-      this.#absorb(response);
+      this.#absorb(response, jar);
       return response;
     };
     const attempt =
