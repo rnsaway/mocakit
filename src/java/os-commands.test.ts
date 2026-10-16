@@ -6,6 +6,7 @@ import {
   POSIX,
   WINDOWS,
   isSafePath,
+  isUsablePath,
   joinRows,
   parseChecksums,
   parseSizeLines,
@@ -275,5 +276,18 @@ describe('POSIX path hardening', () => {
   it('WINDOWS still accepts backslash paths', () => {
     expect(() => WINDOWS.statFiles(['C:\\acme\\cust\\lib\\a.jar'])).not.toThrow();
     expect(() => WINDOWS.listJars('C:\\acme\\cust\\lib\\')).not.toThrow();
+  });
+});
+
+describe('isUsablePath', () => {
+  it('requires an absolute path without a backslash on posix', () => {
+    expect(isUsablePath('posix', '/opt/acme/a.jar')).toBe(true);
+    expect(isUsablePath('posix', 'opt/acme/a.jar')).toBe(false);
+    expect(isUsablePath('posix', '/opt/acme\\a.jar')).toBe(false);
+    expect(isUsablePath('posix', '/opt/acme/a$b.jar')).toBe(false);
+  });
+  it('accepts any safe path on windows', () => {
+    expect(isUsablePath('windows', 'C:\\acme\\a.jar')).toBe(true);
+    expect(isUsablePath('windows', 'C:\\acme\\a%b.jar')).toBe(false);
   });
 });

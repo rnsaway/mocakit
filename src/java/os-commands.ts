@@ -20,6 +20,12 @@ export function isSafePath(path: string): boolean {
   return SAFE_PATH.test(path);
 }
 
+/** True when the templates for `family` accept `path` (posix also needs an absolute path without a backslash). */
+export function isUsablePath(family: OsFamily, path: string): boolean {
+  if (!isSafePath(path)) return false;
+  return family === 'windows' || (!path.includes('\\') && path.startsWith('/'));
+}
+
 /** Concatenate the `result` columns in order (the server cuts stdout into chunks, not lines). */
 export function joinRows(rows: MocaRow[]): string {
   return rows.map((r) => (r.result == null ? '' : String(r.result))).join('');
