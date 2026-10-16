@@ -41,6 +41,12 @@ export interface JavaManifest {
   decompiler?: { command: string; args: string[]; inputs: Record<string, string> };
   /** Relative paths of written .java files. */
   src: string[];
+  /**
+   * Commands with a Java class as read on the last live run (sorted by key), with the entry path
+   * that provides the class ('' when none does), so that `--from-snapshot` can rebuild the
+   * command links without the server.
+   */
+  commands?: Array<{ key: string; name: string; javaClass: string; method?: string; entry: string }>;
 }
 
 export const MANIFEST_FILE = 'manifest.json';

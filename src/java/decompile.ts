@@ -2,14 +2,10 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import type { DecompilerConfig } from '../define-config.js';
 import { probeStart, runExternal, substitute } from '../util/run-external.js';
 
-export interface DecompilerConfig {
-  command: string;
-  args: string[];
-  /** Default 120000. */
-  timeoutMs?: number;
-}
+export type { DecompilerConfig };
 
 export type DecompileResult =
   | { ok: true; sources: Map<string, string>; cleanupWarning?: string }

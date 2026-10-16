@@ -303,4 +303,17 @@ describe('runCli .env loading', () => {
     expect(await runCli(['generate', '--api', '--no-api'], cliIo, await tempDir())).toBe(1);
     expect(err).toContain('mocakit: --api and --no-api cannot be used together');
   });
+
+  it('rejects --java together with --no-java', async () => {
+    const { io: cliIo, err } = capture();
+    expect(await runCli(['generate', '--java', '--no-java'], cliIo, await tempDir())).toBe(1);
+    expect(err).toContain('mocakit: --java and --no-java cannot be used together');
+  });
+
+  it('documents the Java flags', async () => {
+    const { io: cliIo, out } = capture();
+    await runCli(['--help'], cliIo);
+    expect(out.join('\n')).toContain('[--java | --no-java]');
+    expect(out.join('\n')).toContain('--no-java');
+  });
 });

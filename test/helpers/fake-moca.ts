@@ -1,4 +1,4 @@
-import { MocaTransportError } from '../../src/errors.js';
+import { MocaCommandError, MocaTransportError } from '../../src/errors.js';
 import { escapeXmlAttribute, escapeXmlText, findChild, findChildren, parseXml } from '../../src/protocol/xml.js';
 import type { Transport } from '../../src/transport/http.js';
 import { redactUrl } from '../../src/util/url.js';
@@ -66,3 +66,28 @@ export const baseConfig = {
   password: "p'w",
   session: { reuse: false },
 } as const;
+
+const OS_COMMAND_PREFIX = "execute os command where cmd = '";
+
+/**
+ * Answers `execute os command where cmd = '<quoted>'` by unwrapping the MOCA string (a doubled `'`
+ * is one quote) and running it with `exec` (e.g. `fakeOs(...).exec`). Stdout comes back in one
+ * `result` column, cut into rows of at most 4,095 characters like the real server; a
+ * `MocaCommandError` becomes that status. Returns null for any other query.
+ */
+export async function answerOsCommand(query: string, exec: (command: string) => Promise<string>): Promise<string | null> {
+  if (!query.startsWith(OS_COMMAND_PREFIX) || !query.endsWith("'")) return null;
+  const quoted = query.slice(OS_COMMAND_PREFIX.length, -1);
+  if (quoted.split("''").join('').includes("'")) return null;
+  const command = quoted.split("''").join("'");
+  let text: string;
+  try {
+    text = await exec(command);
+  } catch (error) {
+    if (error instanceof MocaCommandError) return mocaXml(error.status, {}, error.serverMessage ?? undefined);
+    throw error;
+  }
+  const rows: Array<[string]> = [];
+  for (let i = 0; i < text.length; i += 4095) rows.push([text.slice(i, i + 4095)]);
+  return mocaXml(0, { columns: [{ name: 'result' }], rows });
+}

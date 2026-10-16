@@ -55,6 +55,38 @@ export interface ApiConfig {
   docs?: string | false;
 }
 
+/** A Java decompiler installed locally (e.g. CFR or Vineflower); run without a shell. */
+export interface DecompilerConfig {
+  command: string;
+  /** May contain `{input}` (a JAR file or a classes folder) and `{output}` (an empty folder). */
+  args: string[];
+  /** Per input. Default 120000. */
+  timeoutMs?: number;
+}
+
+/**
+ * Opt-in Java introspection (moca-java/): the server's classpath read with `execute os command`,
+ * the selected JARs and classes downloaded and verified, and optionally decompiled.
+ */
+export interface JavaConfig {
+  /** Classpath roots to download: `$LESDIR`, a sibling component name (e.g. `cust`) or an absolute path. Default `['$LESDIR']`. */
+  roots?: string[];
+  /** File-name globs always treated as custom code. */
+  custom?: string[];
+  /** File-name globs always treated as libraries (wins over `custom`). */
+  libraries?: string[];
+  /** Output folder. Default `moca-java` next to `out`. */
+  dir?: string;
+  /** Agent docs (README.md, INDEX.md, entries/). Default true. */
+  docs?: boolean;
+  /** Files larger than this many bytes are skipped. Default 25 MiB. */
+  maxFileSize?: number;
+  /** A locally installed decompiler; `args` may use `{input}` and `{output}`. Without it no source is produced. */
+  decompiler?: DecompilerConfig;
+  /** Also decompile libraries. Default false (custom code only). */
+  decompileLibraries?: boolean;
+}
+
 export interface MocakitConfig {
   /** Falls back to the MOCA_URL environment variable. */
   url?: string;
@@ -82,6 +114,8 @@ export interface MocakitConfig {
   commandDocs?: boolean | CommandDocsConfig;
   /** `true` or an object enables the REST API client; see `ApiConfig`. Default off. */
   api?: boolean | ApiConfig;
+  /** `true` or an object enables Java introspection (moca-java/); see `JavaConfig`. Default off. */
+  java?: boolean | JavaConfig;
 }
 
 export function defineConfig(config: MocakitConfig): MocakitConfig {

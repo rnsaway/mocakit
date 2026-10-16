@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { MocaClient, type MocaClientDeps } from '../client/client.js';
 import type { MocakitConfig, SchemaConfig } from '../define-config.js';
@@ -10,7 +10,11 @@ import { emitApi, filterOperations } from '../codegen/emit-api.js';
 import { emitApiDocs } from '../codegen/emit-api-docs.js';
 import { httpRestTransport } from '../transport/rest.js';
 import { checkDocsTargets, writeDocs } from '../codegen/docs-writer.js';
-import { readCodes, readTriggers, type TriggerInfo } from '../codegen/introspect-agent.js';
+import { readCodes, readCommandDefinitions, readTriggers, type CommandInfo, type TriggerInfo } from '../codegen/introspect-agent.js';
+import { commandDocFile } from '../codegen/emit-command-docs.js';
+import { commandKey } from '../codegen/names.js';
+import type { JavaManifest } from '../java/manifest.js';
+import { osExecFor, readJavaServer, type JavaServerRead } from '../java/server-reader.js';
 import { emit } from '../codegen/emit.js';
 import { emitSchema, filterTables, type SchemaFilter } from '../codegen/emit-schema.js';
 import { checkSchemaDocsTargets, emitSchemaDocs, writeSchemaDocs } from '../codegen/emit-schema-docs.js';
@@ -28,10 +32,12 @@ import {
   documentedCommands,
   emitDocumentedCommands,
   readDocumentedCommands,
+  relativeHref,
   resolveCodesSettings,
   resolveCommandDocsSettings,
 } from './command-docs.js';
 import { apiDocsManagedDirs, readApiSnapshotFile, resolveApiSettings } from './api-step.js';
+import { buildJavaOutput, loadPreviousJava, requirePreviousJava, resolveJavaSettings, writeJavaOutput, type JavaOutput } from './java-step.js';
 import { loadConfig, resolveConnection } from './load-config.js';
 
 export interface CliIo {
@@ -49,6 +55,8 @@ export interface GenerateOptions {
   commandDocs?: boolean;
   /** `true` = --api, `false` = --no-api, `undefined` = the config decides. */
   api?: boolean;
+  /** `true` = --java, `false` = --no-java, `undefined` = the config decides. */
+  java?: boolean;
   dryRun: boolean;
   /** Print every warning instead of the first `MAX_PRINTED_WARNINGS` and a count. */
   verbose?: boolean;
@@ -161,6 +169,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   const commandDocs = resolveCommandDocsSettings(config, options.commandDocs, configDir, out);
   const codesSettings = resolveCodesSettings(config, schema !== null);
   const api = resolveApiSettings(config, options.api, configDir, out);
+  const java = resolveJavaSettings(config, options.java, configDir, out);
 
   if (!options.dryRun) {
     // Fail fast, before contacting the server, if an output directory can't be created.
@@ -187,6 +196,9 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   let schemaSnapshot: SchemaSnapshot | null = null;
   let commandRows: IntrospectResult['commandRows'];
   let triggers: TriggerInfo[] = [];
+  let javaPrevious: JavaManifest | null = null;
+  let javaCache = new Map<string, Uint8Array>();
+  let javaRead: JavaServerRead | null = null;
   if (options.fromSnapshot !== undefined) {
     const snapshotFile = resolve(cwd, options.fromSnapshot);
     try {
@@ -202,20 +214,27 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     }
     if (schema !== null) schemaSnapshot = await readSchemaFile(schema.snapshot);
     if (commandDocs !== null) io.log('Skipped command docs: they need a live server (--from-snapshot)');
+    if (java !== null) ({ previous: javaPrevious, cache: javaCache } = await requirePreviousJava(java.dir));
   } else {
     const connection = resolveConnection(config, env);
+    // Files already stored locally (and still matching their checksum) are not downloaded again.
+    if (java !== null) ({ previous: javaPrevious, cache: javaCache } = await loadPreviousJava(java.dir));
     io.log(`Introspecting ${redactUrl(connection.url)} …`);
     const client = new MocaClient({ ...connection, session: { reuse: false } }, options.deps);
     let introspected: Awaited<ReturnType<typeof introspect>>;
     let schemaResult: Awaited<ReturnType<typeof introspectSchema>> | null = null;
     let codesResult: Awaited<ReturnType<typeof readCodes>> | null = null;
     try {
-      introspected = await introspect(client, { version: VERSION, server: connection.url, keepCommandRows: commandDocs !== null });
+      introspected = await introspect(client, { version: VERSION, server: connection.url, keepCommandRows: commandDocs !== null || java !== null });
       if (schema !== null) schemaResult = await introspectSchema(client, { version: VERSION, server: connection.url });
       if (codesSettings !== null) {
         codesResult = await readCodes(client, codesSettings.locale ?? client.session.locale ?? 'US_ENGLISH');
       }
       if (commandDocs !== null && commandDocs.triggers) triggers = await readTriggers(client);
+      if (java !== null) {
+        const cache = javaCache;
+        javaRead = await readJavaServer(osExecFor(client), { roots: java.roots, maxFileSize: java.maxFileSize, cached: (sha) => cache.has(sha) });
+      }
     } finally {
       await client.logout().catch(() => undefined);
     }
@@ -271,6 +290,36 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     }
   }
 
+  let javaOutput: JavaOutput | null = null;
+  if (java !== null) {
+    if (javaRead !== null) warn.print(javaRead.warnings);
+    const commands: CommandInfo[] | null = commandRows !== undefined ? readCommandDefinitions(commandRows) : null;
+    // Entry pages link to this run's command docs or, when none are emitted this run, to those in a
+    // previously generated command INDEX.md.
+    const commandsOut = commandDocs?.out ?? commandDocsDir(config, configDir, out);
+    const documentedNames =
+      commandModels !== null ? commandModels.map((m) => m.info.name) : [...((await readDocumentedCommands(commandsOut)) ?? [])];
+    const documented = new Set(documentedNames.map((name) => commandKey(name)));
+    javaOutput = await buildJavaOutput(javaRead, javaPrevious, java, {
+      version: VERSION,
+      server: snapshot.server,
+      dir: java.dir,
+      cache: javaCache,
+      commands,
+      commandHref: (key) =>
+        documented.has(key) ? relativeHref(join(java.dir, 'entries', '_'), join(commandsOut, 'commands', commandDocFile(key).file)) : undefined,
+    });
+    warn.print(javaOutput.warnings);
+    const { stats } = javaOutput;
+    const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+    if (javaRead !== null) {
+      io.log(`Read classpath: ${stats.entries} entries (${stats.selected} selected, ${stats.files} files, ${mb(stats.bytes)} MB)`);
+      io.log(`Downloaded ${stats.downloaded} files (${mb(stats.downloadedBytes)} MB, ${stats.unchanged} unchanged)`);
+    }
+    if (java.decompiler === null) io.log('No decompiler configured; skipped Java source');
+    else io.log(`Decompiled ${stats.decompiled} entries (${stats.skippedLibraries} skipped: libraries)`);
+  }
+
   // Keep the previous usage when this run did not compute it (command docs off), so the table
   // docs' "Used by" sections survive. Code values are never carried over.
   const existingSchema = schema !== null && schemaSnapshot !== null ? await readSchemaSnapshot(schema.snapshot).catch(() => null) : null;
@@ -316,6 +365,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       server: snapshot.server,
       schemaDocs: schema?.docs ?? null,
       documentedTables,
+      ...(java !== null && javaOutput !== null ? { java: { links: javaOutput.links, dir: java.dir } } : {}),
     });
     warn.print(emitted.warnings);
     commandDocsFiles = emitted.files;
@@ -344,6 +394,9 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   }
   if (!options.dryRun && api !== null && api.docs !== null && apiOutput?.docs) {
     await checkDocsTargets(api.docs, apiOutput.docs, 'api.docs');
+  }
+  if (!options.dryRun && java !== null && javaOutput?.docs) {
+    await checkDocsTargets(java.dir, javaOutput.docs, 'java.dir');
   }
 
   if (options.fromSnapshot === undefined) {
@@ -444,5 +497,11 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       }
       io.log(`${verb} ${apiOutput.count} API docs to ${api.docs}`);
     }
+  }
+
+  if (java !== null && javaOutput !== null) {
+    const result = await writeJavaOutput(java, javaOutput, javaPrevious, options.dryRun);
+    io.log(`${verb} Java inventory to ${java.dir}`);
+    if (!options.dryRun && result.removed > 0) io.log(`Removed ${result.removed} stale Java files`);
   }
 }
