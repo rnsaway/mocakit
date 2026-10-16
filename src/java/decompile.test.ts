@@ -1,4 +1,5 @@
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +30,7 @@ function withMode<T>(mode: string, fn: () => Promise<T>): Promise<T> {
   });
 }
 
+const before0 = new Set<string>();
 const tmpEntries = () => new Set(readdirSync(tmpdir()).filter((n) => n.startsWith('mocakit-decompile-')));
 
 describe('decompile', () => {
@@ -93,6 +95,32 @@ describe('decompile', () => {
       expect(tmpEntries()).toEqual(before);
     },
   );
+
+  it('returns ok:false instead of rejecting on a key collision', async () => {
+    const files = new Map([
+      ['a', new Uint8Array([1])],
+      ['a/b.class', new Uint8Array([2])],
+    ]);
+    const before = tmpEntries();
+    const r = await withMode('ok', () => decompile(config(), { name: 'clash', files }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.warning).toMatch(/^decompile failed for clash: /);
+    expect(tmpEntries()).toEqual(before);
+  });
+
+  it('keeps an ok result when removing the temp folder fails', async () => {
+    for (const n of tmpEntries()) before0.add(n);
+    const failingRm = (async () => {
+      throw new Error('EBUSY');
+    }) as unknown as typeof rm;
+    const r = await withMode('ok', () => decompile(config(), jar(), { rm: failingRm }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.cleanupWarning).toMatch(/^temp folder not removed: /);
+    const r2 = await withMode('fail', () => decompile(config(), jar(), { rm: failingRm }));
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.warning).toMatch(/\(temp folder not removed: .+\)$/);
+    for (const n of tmpEntries()) if (!before0.has(n)) rmSync(join(tmpdir(), n), { recursive: true, force: true });
+  });
 
   it('does not follow symlinks in decompiler output', async () => {
     if (process.platform === 'win32') return;

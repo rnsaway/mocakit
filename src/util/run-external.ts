@@ -8,7 +8,16 @@ export interface ExternalResult {
   stderr: string;
   /** True when the process could not be spawned at all. */
   startFailed?: boolean;
+  /** The spawn error code (e.g. ENOENT, EINVAL) when `startFailed`. */
+  startErrorCode?: string;
 }
+
+/** True for spawn errors that mean the command cannot be run: not found, not executable, or a Windows .cmd/.bat wrapper. */
+export function isStartFailure(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'EACCES' || code === 'EINVAL';
+}
+
 
 export interface RunExternalOptions {
   timeoutMs: number;
@@ -67,7 +76,15 @@ export function runExternal(command: string, args: string[], opts: RunExternalOp
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (e) {
-      finish({ ok: false, code: null, timedOut: false, stdout: Buffer.alloc(0), stderr: String(e), startFailed: true });
+      finish({
+        ok: false,
+        code: null,
+        timedOut: false,
+        stdout: Buffer.alloc(0),
+        stderr: String(e),
+        startFailed: true,
+        startErrorCode: (e as NodeJS.ErrnoException).code,
+      });
       return;
     }
 
@@ -94,6 +111,7 @@ export function runExternal(command: string, args: string[], opts: RunExternalOp
         stdout: Buffer.concat(stdoutChunks),
         stderr: err.message,
         startFailed: true,
+        startErrorCode: (err as NodeJS.ErrnoException).code,
       });
     });
     child.on('close', (code) => {
@@ -109,25 +127,29 @@ export function runExternal(command: string, args: string[], opts: RunExternalOp
   });
 }
 
-/** True unless spawning fails with ENOENT or EACCES. A process that starts is killed immediately. */
-export function canStart(command: string): Promise<boolean> {
+/** Try to start a command and kill it at once. `started` is false only for a start failure (see `isStartFailure`). */
+export function probeStart(command: string): Promise<{ started: boolean; code?: string }> {
   return new Promise((resolve) => {
     let child: ChildProcess;
     try {
       child = spawn(command, [], { shell: false, windowsHide: true, stdio: 'ignore', detached: !IS_WINDOWS });
     } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      resolve(!(code === 'ENOENT' || code === 'EACCES'));
+      resolve(isStartFailure(e) ? { started: false, code: (e as NodeJS.ErrnoException).code } : { started: true });
       return;
     }
     child.once('error', (err: NodeJS.ErrnoException) => {
-      resolve(!(err.code === 'ENOENT' || err.code === 'EACCES'));
+      resolve(isStartFailure(err) ? { started: false, code: err.code } : { started: true });
     });
     child.once('spawn', () => {
       killTree(child);
-      resolve(true);
+      resolve({ started: true });
     });
   });
+}
+
+/** False only when the command cannot be started (ENOENT, EACCES, EINVAL). */
+export async function canStart(command: string): Promise<boolean> {
+  return (await probeStart(command)).started;
 }
 
 /** Replace `{name}` tokens inside each argument; other text is left alone. */
