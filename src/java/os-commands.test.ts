@@ -250,3 +250,30 @@ describe('splitFileBatch', () => {
     expect(m.get(1)).toBe('');
   });
 });
+
+describe('POSIX path hardening', () => {
+  const calls: Array<[string, (p: string) => string]> = [
+    ['listJars', (p) => POSIX.listJars(p)],
+    ['listClasses', (p) => POSIX.listClasses(p)],
+    ['statFiles', (p) => POSIX.statFiles([p])],
+    ['checksums', (p) => POSIX.checksums([p])],
+    ['readFilesBase64', (p) => POSIX.readFilesBase64([p])],
+    ['readRangeBase64', (p) => POSIX.readRangeBase64(p, 0, 1)],
+    ['listZip', (p) => POSIX.listZip(p)],
+  ];
+  describe.each(calls)('%s', (_n, call) => {
+    it.each(['/a/lib\\', '/a/b\\c.jar'])('rejects backslash path %j', (p) => {
+      expect(() => call(p)).toThrow();
+    });
+    it.each(['-f', '-Z1.jar', 'relative/a.jar'])('rejects non-absolute path %j', (p) => {
+      expect(() => call(p)).toThrow();
+    });
+    it('accepts an absolute path', () => {
+      expect(() => call('/a/b.jar')).not.toThrow();
+    });
+  });
+  it('WINDOWS still accepts backslash paths', () => {
+    expect(() => WINDOWS.statFiles(['C:\\acme\\cust\\lib\\a.jar'])).not.toThrow();
+    expect(() => WINDOWS.listJars('C:\\acme\\cust\\lib\\')).not.toThrow();
+  });
+});

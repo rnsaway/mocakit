@@ -56,6 +56,20 @@ function safeList(paths: string[]): string[] {
   return paths.map(safe);
 }
 
+/** Posix paths sit inside bash double quotes: no backslash (it can escape the closing quote), and absolute so a leading "-" is never read as an option. */
+function safePosix(path: string): string {
+  safe(path);
+  if (path.includes('\\') || !path.startsWith('/')) {
+    throw new Error(`Unsafe posix path (must be absolute, no backslash): ${JSON.stringify(path)}`);
+  }
+  return path;
+}
+
+function safePosixList(paths: string[]): string[] {
+  if (paths.length === 0) throw new Error('No paths given');
+  return paths.map(safePosix);
+}
+
 function safeName(name: string): string {
   if (!VAR_NAME.test(name)) throw new Error(`Invalid variable name: ${JSON.stringify(name)}`);
   return name;
@@ -78,21 +92,21 @@ export const POSIX: OsCommands = {
   family: 'posix',
   classpathSeparator: ':',
   readVar: (name) => `printenv ${safeName(name)}`,
-  listJars: (dir) => `stat -c "%s %n" "${stripTrailingSeparators(dir, /\/+$/)}"/*.jar 2>/dev/null; true`,
+  listJars: (dir) => `stat -c "%s %n" "${stripTrailingSeparators(safePosix(dir), /\/+$/)}"/*.jar 2>/dev/null; true`,
   listClasses: (dir) =>
-    `find "${safe(dir)}" -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true`,
-  statFiles: (paths) => `stat -c "%s %n" ${safeList(paths).map(quoted).join(' ')} 2>/dev/null; true`,
-  checksums: (paths) => `sha256sum ${safeList(paths).map(quoted).join(' ')}`,
+    `find "${safePosix(dir)}" -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true`,
+  statFiles: (paths) => `stat -c "%s %n" ${safePosixList(paths).map(quoted).join(' ')} 2>/dev/null; true`,
+  checksums: (paths) => `sha256sum ${safePosixList(paths).map(quoted).join(' ')}`,
   readFilesBase64: (paths) =>
-    safeList(paths)
+    safePosixList(paths)
       .map((p, i) => `echo "${FILE_SEPARATOR(i)}"; base64 -w 0 "${p}"; echo`)
       .join('; '),
   readRangeBase64: (path, offset, length) => {
     checkRange(offset, length);
-    return `tail -c +${offset + 1} "${safe(path)}" | head -c ${length} | base64 -w 0`;
+    return `tail -c +${offset + 1} "${safePosix(path)}" | head -c ${length} | base64 -w 0`;
   },
   hasUnzip: () => 'command -v unzip; true',
-  listZip: (path) => `unzip -Z1 "${safe(path)}"`,
+  listZip: (path) => `unzip -Z1 "${safePosix(path)}"`,
 };
 
 const PS_PREFIX = 'powershell -NoProfile -Command';
