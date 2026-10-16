@@ -59,3 +59,62 @@ describe('zip reader', () => {
     expect(() => readZipEntry(zip, { ...entry, method: 99 })).toThrow('unsupported compression method');
   });
 });
+
+type At = { eocd: number; cd: number };
+
+function patched(zip: Uint8Array, edit: (dv: DataView, at: At) => void): Uint8Array {
+  const copy = new Uint8Array(zip);
+  const dv = new DataView(copy.buffer);
+  const eocd = copy.length - 22;
+  edit(dv, { eocd, cd: dv.getUint32(eocd + 16, true) });
+  return copy;
+}
+
+describe('zip reader hardening', () => {
+  const small = { 'a.txt': 'hello hello hello hello' };
+
+  it('caps inflation at the declared size (zip bomb)', () => {
+    const zip = buildZip({ 'z.bin': new Uint8Array(2 * 1024 * 1024) }, { deflate: true });
+    const bad = patched(zip, (dv, at) => dv.setUint32(at.cd + 24, 1, true));
+    const entry = listZip(bad)[0]!;
+    expect(entry.size).toBe(1);
+    expect(() => readZipEntry(bad, entry)).toThrow(ZipError);
+    // aborted during inflation, not after producing the full 2 MiB
+    expect(() => readZipEntry(bad, entry)).toThrow('corrupt compressed data');
+  });
+
+  it('refuses entries above maxEntrySize', () => {
+    const zip = buildZip(small);
+    const entry = listZip(zip)[0]!;
+    expect(() => readZipEntry(zip, entry, { maxEntrySize: 5 })).toThrow('entry too large');
+    expect(readZipEntry(zip, entry, { maxEntrySize: 1000 }).length).toBe(entry.size);
+  });
+
+  const cases: [string, boolean, (dv: DataView, at: At) => void, string][] = [
+    ['entry data out of range', false, (dv, at) => dv.setUint32(at.cd + 20, 100000, true), 'entry data out of range'],
+    ['size mismatch', true, (dv, at) => dv.setUint32(at.cd + 24, 500, true), 'size mismatch'],
+    ['corrupt compressed data', true, (dv) => dv.setUint8(30 + 5, 0xff), 'corrupt compressed data'],
+    ['corrupt central directory', false, (dv, at) => dv.setUint32(at.cd, 0, true), 'corrupt central directory'],
+    ['central directory beyond EOCD', false, (dv, at) => dv.setUint32(at.eocd + 12, 5000, true), 'not a zip file'],
+    ['count larger than entries', false, (dv, at) => dv.setUint16(at.eocd + 10, 5, true), 'corrupt central directory'],
+    ['zip64 count marker', false, (dv, at) => dv.setUint16(at.eocd + 10, 0xffff, true), 'zip64 not supported'],
+    ['zip64 cd offset marker', false, (dv, at) => dv.setUint32(at.eocd + 16, 0xffffffff, true), 'zip64 not supported'],
+    ['zip64 entry size marker', false, (dv, at) => dv.setUint32(at.cd + 24, 0xffffffff, true), 'zip64 not supported'],
+  ];
+  for (const [label, deflate, edit, message] of cases) {
+    it(`rejects: ${label}`, () => {
+      const bad = patched(buildZip(small, { deflate }), edit);
+      const run = () => {
+        for (const e of listZip(bad)) readZipEntry(bad, e);
+      };
+      expect(run).toThrow(ZipError);
+      expect(run).toThrow(message);
+    });
+  }
+
+  it('rejects a truncated archive', () => {
+    const zip = buildZip(small);
+    expect(() => listZip(zip.subarray(0, zip.length - 10))).toThrow(ZipError);
+    expect(() => listZip(zip.subarray(0, 40))).toThrow('not a zip file');
+  });
+});

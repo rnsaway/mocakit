@@ -1,6 +1,7 @@
 import { inflateRawSync } from 'node:zlib';
 
 export interface ZipEntry {
+  /** Untrusted archive data: never use it as a file-system path. */
   name: string;
   method: number;
   compressedSize: number;
@@ -87,9 +88,22 @@ export function listZip(bytes: Uint8Array): ZipEntry[] {
   return entries;
 }
 
-/** Read one entry's uncompressed bytes (stored or deflated). */
-export function readZipEntry(bytes: Uint8Array, entry: ZipEntry): Uint8Array {
+const DEFAULT_MAX_ENTRY_SIZE = 64 * 1024 * 1024;
+
+/**
+ * Read one entry's uncompressed bytes (stored or deflated). Entries whose declared
+ * size exceeds maxEntrySize (default 64 MiB) are refused, and inflation is capped
+ * at the declared size so a crafted stream cannot expand without limit.
+ */
+export function readZipEntry(
+  bytes: Uint8Array,
+  entry: ZipEntry,
+  options?: { maxEntrySize?: number },
+): Uint8Array {
   if (entry.encrypted) throw new ZipError('encrypted entry');
+  if (entry.size > (options?.maxEntrySize ?? DEFAULT_MAX_ENTRY_SIZE)) {
+    throw new ZipError('entry too large');
+  }
   const dv = view(bytes);
   const o = entry.offset;
   if (o + 30 > bytes.length || dv.getUint32(o, true) !== LOCAL_SIG) {
@@ -104,7 +118,7 @@ export function readZipEntry(bytes: Uint8Array, entry: ZipEntry): Uint8Array {
   if (entry.method === 8) {
     let out: Uint8Array;
     try {
-      out = inflateRawSync(data);
+      out = inflateRawSync(data, { maxOutputLength: Math.max(entry.size, 1) });
     } catch {
       throw new ZipError('corrupt compressed data');
     }
