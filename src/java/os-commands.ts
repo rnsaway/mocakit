@@ -98,10 +98,10 @@ export const POSIX: OsCommands = {
   family: 'posix',
   classpathSeparator: ':',
   readVar: (name) => `printenv ${safeName(name)}`,
-  listJars: (dir) => `stat -c "%s %n" "${stripTrailingSeparators(safePosix(dir), /\/+$/)}"/*.jar 2>/dev/null; true`,
+  listJars: (dir) => `stat -L -c "%s %n" "${stripTrailingSeparators(safePosix(dir), /\/+$/)}"/*.jar 2>/dev/null; true`,
   listClasses: (dir) =>
-    `find "${safePosix(dir)}" -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true`,
-  statFiles: (paths) => `stat -c "%s %n" ${safePosixList(paths).map(quoted).join(' ')} 2>/dev/null; true`,
+    `find -L "${safePosix(dir)}" -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true`,
+  statFiles: (paths) => `stat -L -c "%s %n" ${safePosixList(paths).map(quoted).join(' ')} 2>/dev/null; true`,
   checksums: (paths) => `sha256sum ${safePosixList(paths).map(quoted).join(' ')}`,
   readFilesBase64: (paths) =>
     safePosixList(paths)

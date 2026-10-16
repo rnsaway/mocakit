@@ -11,6 +11,10 @@ export interface FakeOsOptions {
   files: Record<string, Uint8Array>;
   /** Empty folders that exist on the server (folders holding files exist implicitly). */
   dirs?: string[];
+  /** Symlinks: link path to target path; stat, hash and reads follow them. */
+  links?: Record<string, string>;
+  /** Extra `<size> <path>` lines appended to every listing and stat output. */
+  injectLines?: string[];
   /** Whether `unzip` is installed (default true). */
   unzip?: boolean;
   /** Files whose downloaded bytes get the first byte flipped. */
@@ -51,26 +55,29 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
   const sep = windows ? '\\' : '/';
   const cmds: OsCommands = windows ? WINDOWS : POSIX;
   const eol = windows ? '\r\n' : '\n';
-  const paths = Object.keys(options.files).sort();
+  const all: Record<string, Uint8Array> = { ...options.files };
+  for (const [link, target] of Object.entries(options.links ?? {})) all[link] = options.files[target]!;
+  const paths = Object.keys(all).sort();
+  const inject = (options.injectLines ?? []).map((l) => `${l}${eol}`).join('');
   const norm = (p: string): string => (windows ? p.toLowerCase() : p);
   const find = (p: string): string | undefined => paths.find((k) => norm(k) === norm(p));
   const dirExists = (d: string): boolean =>
     (options.dirs ?? []).some((x) => norm(x) === norm(d)) || paths.some((k) => norm(k).startsWith(`${norm(d)}${sep}`));
   const exists = (p: string): boolean => find(p) !== undefined || dirExists(p);
-  const sizeOf = (p: string): number => (find(p) !== undefined ? options.files[find(p)!]!.length : 0);
+  const sizeOf = (p: string): number => (find(p) !== undefined ? all[find(p)!]!.length : 0);
   const dirname = (p: string): string => p.slice(0, p.lastIndexOf(sep));
 
   const readBytes = (p: string): Uint8Array | undefined => {
     const key = find(p);
     if (key === undefined || (options.unreadable ?? []).includes(key)) return undefined;
-    const bytes = Uint8Array.from(options.files[key]!);
+    const bytes = Uint8Array.from(all[key]!);
     if ((options.corrupt ?? []).includes(key) && bytes.length > 0) bytes[0] = bytes[0]! ^ 0xff;
     return bytes;
   };
   const need = (p: string): Uint8Array => {
     const key = find(p);
     if (key === undefined) fail(1);
-    return options.files[key]!;
+    return all[key]!;
   };
   const sizeLine = (p: string): string => `${sizeOf(p)} ${p}${eol}`;
 
@@ -94,7 +101,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
         paths
           .filter((k) => norm(dirname(k)) === norm(a[0] as string) && k.toLowerCase().endsWith('.jar'))
           .map(sizeLine)
-          .join(''),
+          .join('') + inject,
     );
     add(
       (c) => /^cmd \/c for \/r "(.*)" %f in \(\*\.class\) do @echo %~zf %f$/.exec(c)?.slice(1) ?? null,
@@ -103,7 +110,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
         paths
           .filter((k) => norm(k).startsWith(`${norm(a[0] as string)}${sep}`) && k.endsWith('.class'))
           .map(sizeLine)
-          .join(''),
+          .join('') + inject,
     );
     add(
       (c) => {
@@ -115,7 +122,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
         (a[0] as string[])
           .filter(exists)
           .map(sizeLine)
-          .join(''),
+          .join('') + inject,
     );
     add(
       (c) => (c.startsWith('certutil ') ? [[...c.matchAll(/certutil -hashfile "([^"]*)" SHA256/g)].map((m) => m[1]!)] : null),
@@ -168,26 +175,26 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
       (a) => (options.env[a[0] as string] === undefined ? fail(1) : `${options.env[a[0] as string]!}${eol}`),
     );
     add(
-      (c) => /^stat -c "%s %n" "(.*)"\/\*\.jar 2>\/dev\/null; true$/.exec(c)?.slice(1) ?? null,
+      (c) => /^stat -L -c "%s %n" "(.*)"\/\*\.jar 2>\/dev\/null; true$/.exec(c)?.slice(1) ?? null,
       (a) => cmds.listJars(a[0] as string),
       (a) =>
         paths
           .filter((k) => dirname(k) === (a[0] as string) && k.endsWith('.jar'))
           .map(sizeLine)
-          .join(''),
+          .join('') + inject,
     );
     add(
-      (c) => /^find "(.*)" -type f -name "\*\.class" -printf "%s %p\\n" 2>\/dev\/null; true$/.exec(c)?.slice(1) ?? null,
+      (c) => /^find -L "(.*)" -type f -name "\*\.class" -printf "%s %p\\n" 2>\/dev\/null; true$/.exec(c)?.slice(1) ?? null,
       (a) => cmds.listClasses(a[0] as string),
       (a) =>
         paths
           .filter((k) => k.startsWith(`${a[0] as string}/`) && k.endsWith('.class'))
           .map(sizeLine)
-          .join(''),
+          .join('') + inject,
     );
     add(
       (c) => {
-        const m = /^stat -c "%s %n" (.*) 2>\/dev\/null; true$/.exec(c);
+        const m = /^stat -L -c "%s %n" (.*) 2>\/dev\/null; true$/.exec(c);
         return m ? [quotedAll(m[1]!)] : null;
       },
       (a) => cmds.statFiles(a[0] as string[]),
@@ -195,7 +202,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
         (a[0] as string[])
           .filter(exists)
           .map((p) => `${find(p) === undefined ? 4096 : sizeOf(p)} ${p}${eol}`)
-          .join(''),
+          .join('') + inject,
     );
     add(
       (c) => (c.startsWith('sha256sum ') ? [quotedAll(c.slice('sha256sum '.length))] : null),
@@ -237,7 +244,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
       (a) => cmds.listZip(a[0] as string),
       (a) => {
         if (options.unzip === false) fail(127);
-        const bytes = options.files[find(a[0] as string) ?? ''];
+        const bytes = all[find(a[0] as string) ?? ''];
         if (bytes === undefined) fail(9);
         return listZip(bytes).map((e) => `${e.name}${eol}`).join('');
       },

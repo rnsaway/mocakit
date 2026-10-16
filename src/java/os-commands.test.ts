@@ -129,12 +129,12 @@ describe('POSIX templates', () => {
     expect(POSIX.family).toBe('posix');
     expect(POSIX.classpathSeparator).toBe(':');
     expect(POSIX.readVar('LESDIR')).toBe('printenv LESDIR');
-    expect(POSIX.listJars('/a/lib')).toBe('stat -c "%s %n" "/a/lib"/*.jar 2>/dev/null; true');
+    expect(POSIX.listJars('/a/lib')).toBe('stat -L -c "%s %n" "/a/lib"/*.jar 2>/dev/null; true');
     expect(POSIX.listClasses('/a/c')).toBe(
-      'find "/a/c" -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true',
+      'find -L "/a/c" -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true',
     );
     expect(POSIX.statFiles(['/a/x.jar', '/a/y z.jar'])).toBe(
-      'stat -c "%s %n" "/a/x.jar" "/a/y z.jar" 2>/dev/null; true',
+      'stat -L -c "%s %n" "/a/x.jar" "/a/y z.jar" 2>/dev/null; true',
     );
     expect(POSIX.checksums(['/a/x.jar', '/a/y.jar'])).toBe('sha256sum "/a/x.jar" "/a/y.jar"');
     expect(POSIX.readFilesBase64(['/a/x.jar', '/a/y.jar'])).toBe(

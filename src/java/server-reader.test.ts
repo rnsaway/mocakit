@@ -293,6 +293,58 @@ describe('readJavaServer (posix)', () => {
     const read = await readJavaServer(fakeOs(posix({ files })).exec, defaults);
     expect(pathsOf(read).slice(0, 2)).toEqual(['/opt/acme/cust/lib/a-first.jar', '/opt/acme/cust/lib/widgets.jar']);
   });
+  it('downloads and verifies a symlinked jar in a wildcard folder', async () => {
+    const env = { LESDIR: '/opt/acme/cust', CLASSPATH: '/opt/acme/cust/lib/*' };
+    const real = '/opt/acme/cust/lib/foo-1.2.jar';
+    const fake = fakeOs(posix({ env, files: { [real]: WIDGETS }, links: { '/opt/acme/cust/lib/foo.jar': real } }));
+    const read = await readJavaServer(fake.exec, defaults);
+    expect(pathsOf(read)).toEqual(['/opt/acme/cust/lib/foo-1.2.jar', '/opt/acme/cust/lib/foo.jar']);
+    for (const f of read.files) {
+      expect(f.size).toBe(WIDGETS.length);
+      expect(f.sha256).toBe(sha(WIDGETS));
+      expect(Buffer.from(f.bytes!).equals(Buffer.from(WIDGETS))).toBe(true);
+    }
+  });
+
+  it('ignores listing lines outside the entry, without checksumming or downloading them', async () => {
+    const fake = fakeOs(posix({ injectLines: ['123 /etc/x.jar', '5 /opt/acme/cust/lib/sub/y.jar', '9 /etc/y.class'] }));
+    const read = await readJavaServer(fake.exec, defaults);
+    expect(pathsOf(read)).toEqual([
+      '/opt/acme/cust/lib/widgets.jar',
+      '/opt/acme/cust/classes/com/acme/cust/Thing.class',
+      '/opt/acme/cust/ext/one.jar',
+    ]);
+    expect(read.warnings).toContain('ignored unexpected listing line for /opt/acme/cust/lib: /etc/x.jar');
+    expect(read.warnings).toContain('ignored unexpected listing line for /opt/acme/cust/lib: /opt/acme/cust/lib/sub/y.jar');
+    expect(read.warnings).toContain('ignored unexpected listing line for /opt/acme/cust/classes: /etc/y.class');
+    expect(fake.commands.filter((c) => c.includes('/etc/') && !c.startsWith('stat') && !c.startsWith('find'))).toEqual([]);
+  });
+
+  it('ignores a stray line when checking whether a classes folder exists', async () => {
+    const env = { LESDIR: '/opt/acme/cust', CLASSPATH: '/opt/acme/cust/nodir' };
+    const read = await readJavaServer(fakeOs(posix({ env, injectLines: ['123 /etc/x.jar'] })).exec, defaults);
+    expect(read.missing).toEqual([0]);
+  });
+
+  it('rethrows a variable read failure other than status 1', async () => {
+    const fake = fakeOs(posix());
+    const exec = async (c: string): Promise<string> => {
+      if (c === 'printenv LESDIR') throw new MocaCommandError(5, null);
+      return fake.exec(c);
+    };
+    await expect(readJavaServer(exec, defaults)).rejects.toBeInstanceOf(MocaCommandError);
+  });
+
+  it('puts at most 50 files in one download batch whatever checksumBatch is', async () => {
+    const files: Record<string, Uint8Array> = {};
+    for (let i = 0; i < 60; i++) files[`/opt/acme/cust/lib/f${String(i).padStart(2, '0')}.jar`] = bytes(10, i);
+    const fake = fakeOs({ family: 'posix', env: { LESDIR: '/opt/acme/cust', CLASSPATH: '/opt/acme/cust/lib/*' }, files });
+    const read = await readJavaServer(fake.exec, { ...defaults, checksumBatch: 10 });
+    const batches = fake.commands.filter((c) => c.includes('MOCAKIT-FILE'));
+    expect(batches).toHaveLength(2);
+    expect(batches[0]!.match(/MOCAKIT-FILE/g)).toHaveLength(50);
+    expect(read.files).toHaveLength(60);
+  });
 });
 
 describe('readJavaServer (windows)', () => {

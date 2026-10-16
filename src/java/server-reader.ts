@@ -60,6 +60,8 @@ export interface ReadJavaServerOptions {
 }
 
 const MIB = 1024 * 1024;
+/** Files per download batch (a fixed command-size guard, independent of the checksum batch size). */
+const MAX_DOWNLOAD_FILES = 50;
 /** cmd.exe stops at 8,191 characters; stay well below that for every command. */
 const MAX_COMMAND_LENGTH = 7000;
 
@@ -92,7 +94,8 @@ async function readVar(exec: OsExec, family: OsFamily, cmds: OsCommands, name: s
   try {
     text = await exec(cmds.readVar(name));
   } catch (error) {
-    if (!(error instanceof MocaCommandError)) throw error;
+    // printenv exits 1 for an unset variable; any other failure is a real error.
+    if (!(error instanceof MocaCommandError) || error.status !== 1) throw error;
   }
   const value = parseVarOutput(family, name, text);
   if (value === '') throw new Error(`Java introspection: ${name} is empty on the server`);
@@ -164,9 +167,22 @@ export async function readJavaServer(exec: OsExec, options: ReadJavaServerOption
     }
   }
 
-  const accept = (entryIndex: number, text: string, suffix: string): Listed[] => {
+  const canon = (p: string): string => (family === 'windows' ? p.toLowerCase().replace(/\\/g, '/') : p);
+  /** Listed paths must lie where the command looked: the wildcard folder itself, or anywhere below a classes folder. */
+  const inEntry = (e: ClasspathEntry, path: string): boolean => {
+    const entry = canon(e.path);
+    const p = canon(path);
+    if (e.type === 'dir-wildcard') return p.slice(0, p.lastIndexOf('/')) === entry.replace(/\/+$/, '');
+    return p.startsWith(entry.endsWith('/') ? entry : `${entry}/`);
+  };
+  const accept = (e: ClasspathEntry, text: string, suffix: string): Listed[] => {
+    const entryIndex = e.index;
     const out: Listed[] = [];
     for (const { size, path } of parseSizeLines(text)) {
+      if (!inEntry(e, path)) {
+        warnings.push(`ignored unexpected listing line for ${e.path}: ${path}`);
+        continue;
+      }
       if (!path.toLowerCase().endsWith(suffix)) continue;
       if (!isUsablePath(family, path)) {
         skipUnsafe(path);
@@ -182,12 +198,12 @@ export async function readJavaServer(exec: OsExec, options: ReadJavaServerOption
   const selectedJars = usable.filter((e) => e.selected && e.type === 'jar');
   for (const e of usable.filter((x) => x.selected)) {
     if (e.type === 'dir-wildcard') {
-      listed.push(...accept(e.index, await exec(cmds.listJars(e.path)), '.jar'));
+      listed.push(...accept(e, await exec(cmds.listJars(e.path)), '.jar'));
     } else if (e.type === 'dir') {
-      const found = accept(e.index, await exec(cmds.listClasses(e.path)), '.class');
+      const found = accept(e, await exec(cmds.listClasses(e.path)), '.class');
       listed.push(...found);
       if (found.length === 0) {
-        const there = parseSizeLines(await exec(cmds.statFiles([e.path])));
+        const there = parseSizeLines(await exec(cmds.statFiles([e.path]))).filter((l) => canon(l.path) === canon(e.path));
         if (there.length === 0) missing.push(e.index);
       }
     }
@@ -256,7 +272,7 @@ export async function readJavaServer(exec: OsExec, options: ReadJavaServerOption
 
   const batches = chunked(
     small,
-    checksumBatch,
+    MAX_DOWNLOAD_FILES,
     (c) => cmds.readFilesBase64(c.map((f) => f.path)),
     (c) => c.reduce((sum, f) => sum + f.size, 0) <= batchBytes,
   );
@@ -287,7 +303,7 @@ export async function readJavaServer(exec: OsExec, options: ReadJavaServerOption
     const toList = new Set<string>();
     for (const e of unselected) {
       if (e.type === 'jar') toList.add(e.path);
-      else for (const f of accept(e.index, await exec(cmds.listJars(e.path)), '.jar')) toList.add(f.path);
+      else for (const f of accept(e, await exec(cmds.listJars(e.path)), '.jar')) toList.add(f.path);
     }
     for (const path of toList) {
       try {
