@@ -8,6 +8,8 @@ export interface ParsedEntry {
   raw: string;
   path: string;
   type: EntryType;
+  /** False when the path is not absolute for its OS family; such entries are never selected. */
+  usable: boolean;
 }
 
 export interface ClasspathEntry extends ParsedEntry {
@@ -37,6 +39,7 @@ function normalize(p: string, family: OsFamily): string {
 
 /** Split a CLASSPATH value into typed entries (empty items and repeated raw values dropped). */
 export function parseClasspath(value: string, separator: ':' | ';'): ParsedEntry[] {
+  const family: OsFamily = separator === ';' ? 'windows' : 'posix';
   const seen = new Set<string>();
   const out: ParsedEntry[] = [];
   for (const piece of value.split(separator)) {
@@ -47,13 +50,13 @@ export function parseClasspath(value: string, separator: ':' | ';'): ParsedEntry
     let type: EntryType;
     if (/[\\/]\*$/.test(raw)) {
       type = 'dir-wildcard';
-      path = raw.slice(0, -2) || raw.slice(0, 1);
+      path = trimTrailingSeparators(raw.slice(0, -1), family);
     } else if (raw.toLowerCase().endsWith('.jar')) {
       type = 'jar';
     } else {
       type = 'dir';
     }
-    out.push({ index: out.length, raw, path, type });
+    out.push({ index: out.length, raw, path, type, usable: pathApi(family).isAbsolute(path) });
   }
   return out;
 }
@@ -76,7 +79,10 @@ export function resolveRoots(roots: string[], lesDir: string, family: OsFamily):
   });
 }
 
-/** Component name and its folder: the first path segment under dirname(lesDir), or the whole path when outside it. */
+/** Component for absolute entries outside dirname(lesDir); a safe single folder name. */
+const EXTERNAL = 'external';
+
+/** Component name and its folder: the first path segment under dirname(lesDir), or `external` when outside it. */
 function locate(path: string, lesDir: string, family: OsFamily): { name: string; dir: string } {
   const api = pathApi(family);
   const base = api.dirname(normalize(lesDir, family));
@@ -85,7 +91,7 @@ function locate(path: string, lesDir: string, family: OsFamily): { name: string;
     const name = api.relative(base, p).split(/[\\/]/)[0];
     return { name, dir: api.join(base, name) };
   }
-  return { name: p, dir: p };
+  return { name: EXTERNAL, dir: '' };
 }
 
 function componentOf(path: string, lesDir: string, family: OsFamily): string {
@@ -96,6 +102,7 @@ function componentOf(path: string, lesDir: string, family: OsFamily): string {
 export function componentsOf(entries: Array<{ path: string }>, lesDir: string, family: OsFamily): string[] {
   const out: string[] = [];
   for (const e of entries) {
+    if (!pathApi(family).isAbsolute(e.path)) continue;
     const c = componentOf(e.path, lesDir, family);
     if (!out.includes(c)) out.push(c);
   }
@@ -106,7 +113,7 @@ export function componentsOf(entries: Array<{ path: string }>, lesDir: string, f
 function baseSlug(entry: ParsedEntry, componentPath: string, family: OsFamily): string {
   const api = pathApi(family);
   const p = normalize(entry.path, family);
-  let rel = isUnder(p, componentPath, family) ? api.relative(componentPath, p) : p;
+  let rel = componentPath !== '' && isUnder(p, componentPath, family) ? api.relative(componentPath, p) : p;
   if (rel === '') rel = api.basename(componentPath);
   let slug = rel
     .split(/[\\/:]+/)
@@ -126,10 +133,15 @@ export function selectEntries(
   roots: string[],
   lesDir: string,
   family: OsFamily,
-): ClasspathEntry[] {
+): { entries: ClasspathEntry[]; warnings: string[] } {
+  const warnings: string[] = [];
   const resolved = resolveRoots(roots, lesDir, family);
   const used = new Map<string, Set<string>>();
   const out: ClasspathEntry[] = entries.map((e) => {
+    if (!e.usable) {
+      warnings.push(`classpath entry "${e.raw}" is not an absolute path; skipped`);
+      return { ...e, component: '', slug: '', selected: false };
+    }
     const { name: component, dir: componentPath } = locate(e.path, lesDir, family);
     const key = family === 'windows' ? component.toLowerCase() : component;
     const taken = used.get(key) ?? new Set<string>();
@@ -143,13 +155,13 @@ export function selectEntries(
   });
   roots.forEach((root, i) => {
     const r = resolved[i];
-    if (!out.some((e) => isUnder(normalize(e.path, family), r, family))) {
+    if (!out.some((e) => e.usable && isUnder(normalize(e.path, family), r, family))) {
       throw new Error(
         `java.roots: "${root}" matches no classpath entry (components: ${componentsOf(entries, lesDir, family).join(', ')})`,
       );
     }
   });
-  return out;
+  return { entries: out, warnings };
 }
 
 /**
