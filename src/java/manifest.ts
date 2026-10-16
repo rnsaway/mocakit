@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, posix, win32 } from 'node:path';
 import type { ClasspathEntry, EntryType } from './classpath.js';
 import type { OsFamily } from './os-commands.js';
 
@@ -55,14 +55,6 @@ function sameSegment(a: string, b: string, family: OsFamily): boolean {
   return family === 'windows' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
-/** Segments of `path` below the segment that is the entry's component folder (first match). */
-function belowComponent(path: string, component: string, family: OsFamily): string[] {
-  const parts = segmentsOf(path, family);
-  const at = parts.findIndex((s) => sameSegment(s, component, family));
-  if (at < 0) throw new Error(`path "${path}" is not under component "${component}"`);
-  return parts.slice(at + 1);
-}
-
 /** Segments of `path` below `base`. */
 function belowFolder(path: string, base: string, family: OsFamily): string[] {
   const parts = segmentsOf(path, family);
@@ -78,9 +70,9 @@ function belowFolder(path: string, base: string, family: OsFamily): string[] {
  * file: `jars/<component>/<path under component>` for JARs, otherwise
  * `classes/<component>/<...>`. Entries outside every component use
  * `jars/external/<slug>/<file name>` and `classes/external/<slug>/<path under entry>`.
- * Throws if the result would escape the folder.
+ * The component folder is `dirname(lesDir)/<component>`. Throws if the result would escape the folder.
  */
-export function localPathFor(entry: ClasspathEntry, serverPath: string, family: OsFamily): string {
+export function localPathFor(entry: ClasspathEntry, serverPath: string, family: OsFamily, lesDir: string): string {
   if (!entry.usable || entry.component === '') throw new Error(`classpath entry "${entry.raw}" has no local path`);
   const isJar = serverPath.toLowerCase().endsWith('.jar');
   const top = isJar ? 'jars' : 'classes';
@@ -91,7 +83,13 @@ export function localPathFor(entry: ClasspathEntry, serverPath: string, family: 
       : belowFolder(serverPath, entry.path, family);
     parts = ['external', entry.slug, ...rest];
   } else {
-    parts = [entry.component, ...belowComponent(serverPath, entry.component, family)];
+    const api = family === 'windows' ? win32 : posix;
+    const folder = api.join(api.dirname(lesDir), entry.component);
+    const rel = api.relative(folder, serverPath);
+    if (rel === '' || rel.startsWith('..') || api.isAbsolute(rel)) {
+      throw new Error(`path "${serverPath}" is not under component folder "${folder}"`);
+    }
+    parts = [entry.component, ...segmentsOf(rel, family)];
   }
   const local = [top, ...parts].join('/');
   if (local.split('/').some((s) => s === '' || s === '..') || /^[A-Za-z]:/.test(local)) {

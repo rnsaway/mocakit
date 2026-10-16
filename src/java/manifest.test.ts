@@ -20,6 +20,9 @@ function entriesFor(cp: string, sep: ':' | ';', les: string, fam: 'posix' | 'win
   return selectEntries(parseClasspath(cp, sep), ['$LESDIR'], les, fam).entries;
 }
 
+const LES = '/opt/acme/cust';
+const WLES = 'C:\\acme\\cust';
+
 describe('localPathFor', () => {
   const posix = entriesFor(
     '/opt/acme/cust/lib/*:/opt/acme/core/lib/single.jar:/opt/acme/cust/build/classes:/srv/other/lib/*:/srv/cls',
@@ -28,36 +31,46 @@ describe('localPathFor', () => {
     'posix',
   );
   it('maps a wildcard JAR under its component', () => {
-    expect(localPathFor(posix[0], '/opt/acme/cust/lib/widgets.jar', 'posix')).toBe('jars/cust/lib/widgets.jar');
+    expect(localPathFor(posix[0], '/opt/acme/cust/lib/widgets.jar', 'posix', LES)).toBe('jars/cust/lib/widgets.jar');
   });
   it('maps a single JAR', () => {
-    expect(localPathFor(posix[1], '/opt/acme/core/lib/single.jar', 'posix')).toBe('jars/core/lib/single.jar');
+    expect(localPathFor(posix[1], '/opt/acme/core/lib/single.jar', 'posix', LES)).toBe('jars/core/lib/single.jar');
   });
   it('maps a loose class', () => {
-    expect(localPathFor(posix[2], '/opt/acme/cust/build/classes/com/acme/cust/Widgets.class', 'posix')).toBe(
+    expect(localPathFor(posix[2], '/opt/acme/cust/build/classes/com/acme/cust/Widgets.class', 'posix', LES)).toBe(
       'classes/cust/build/classes/com/acme/cust/Widgets.class',
     );
   });
   it('maps external entries by slug', () => {
     expect(posix[3].component).toBe('external');
-    expect(localPathFor(posix[3], '/srv/other/lib/x.jar', 'posix')).toBe(`jars/external/${posix[3].slug}/x.jar`);
-    expect(localPathFor(posix[4], '/srv/cls/a/B.class', 'posix')).toBe(`classes/external/${posix[4].slug}/a/B.class`);
+    expect(localPathFor(posix[3], '/srv/other/lib/x.jar', 'posix', LES)).toBe(`jars/external/${posix[3].slug}/x.jar`);
+    expect(localPathFor(posix[4], '/srv/cls/a/B.class', 'posix', LES)).toBe(`classes/external/${posix[4].slug}/a/B.class`);
   });
   it('gives posix separators for windows inputs', () => {
     const win = entriesFor('C:\\acme\\cust\\lib\\*;C:\\acme\\cust\\build\\classes', ';', 'C:\\acme\\cust', 'windows');
-    expect(localPathFor(win[0], 'C:\\acme\\cust\\lib\\widgets.jar', 'windows')).toBe('jars/cust/lib/widgets.jar');
-    expect(localPathFor(win[1], 'C:\\acme\\cust\\build\\classes\\com\\acme\\W.class', 'windows')).toBe(
+    expect(localPathFor(win[0], 'C:\\acme\\cust\\lib\\widgets.jar', 'windows', WLES)).toBe('jars/cust/lib/widgets.jar');
+    expect(localPathFor(win[1], 'C:\\acme\\cust\\build\\classes\\com\\acme\\W.class', 'windows', WLES)).toBe(
       'classes/cust/build/classes/com/acme/W.class',
     );
   });
+  it('uses the lesDir to find the component folder when its name repeats in an ancestor', () => {
+    const les = '/opt/cust/acme/cust';
+    const e = entriesFor('/opt/cust/acme/cust/lib/*', ':', les, 'posix');
+    expect(localPathFor(e[0], '/opt/cust/acme/cust/lib/a.jar', 'posix', les)).toBe('jars/cust/lib/a.jar');
+  });
+  it('handles a windows lesDir with an ancestor of the same name, case-insensitively', () => {
+    const les = 'C:\\cust\\acme\\cust';
+    const e = entriesFor('C:\\cust\\acme\\cust\\lib\\*', ';', les, 'windows');
+    expect(localPathFor(e[0], 'c:\\CUST\\acme\\cust\\lib\\a.jar', 'windows', les)).toBe('jars/cust/lib/a.jar');
+  });
   it('throws when the path would escape the folder', () => {
-    expect(() => localPathFor(posix[0], '/opt/acme/cust/lib/../../x.jar', 'posix')).toThrow();
-    expect(() => localPathFor(posix[4], '/srv/cls/../x.class', 'posix')).toThrow();
+    expect(() => localPathFor(posix[0], '/opt/acme/cust/lib/../../x.jar', 'posix', LES)).toThrow();
+    expect(() => localPathFor(posix[4], '/srv/cls/../x.class', 'posix', LES)).toThrow();
   });
   it('throws for an unusable entry', () => {
     const rel = entriesFor('relative/a.jar:/opt/acme/cust/lib/*', ':', '/opt/acme/cust', 'posix');
     expect(rel[0].usable).toBe(false);
-    expect(() => localPathFor(rel[0], 'relative/a.jar', 'posix')).toThrow();
+    expect(() => localPathFor(rel[0], 'relative/a.jar', 'posix', LES)).toThrow();
   });
 });
 
