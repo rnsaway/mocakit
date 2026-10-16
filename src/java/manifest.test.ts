@@ -170,4 +170,13 @@ describe('staleFiles', () => {
     expect(staleFiles(null, next)).toEqual([]);
     expect(staleFiles(prev, prev)).toEqual([]);
   });
+
+  it('never returns paths that are unsafe or outside jars/, classes/ and src/', () => {
+    const prev = manifest({
+      src: ['../../README.md', '/etc/x', 'C:\\x', 'C:/x', 'docs/other.md', 'jars/../../x.jar', 'src/old/Gone.java'],
+      entries: [],
+    });
+    prev.entries.push({ ...manifest().entries[0], files: [{ ...manifest().entries[0].files[0], local: 'jars/cust/lib/old.jar' }] });
+    expect(staleFiles(prev, manifest({ entries: [], src: [] }))).toEqual(['jars/cust/lib/old.jar', 'src/old/Gone.java']);
+  });
 });

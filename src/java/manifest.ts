@@ -166,9 +166,17 @@ function producedPaths(m: JavaManifest): Set<string> {
   return out;
 }
 
-/** Local and src paths recorded by `previous` that `next` no longer produces (sorted). */
+const STORE_PREFIXES = ['jars/', 'classes/', 'src/'];
+
+/**
+ * Local and src paths recorded by `previous` that `next` no longer produces (sorted).
+ * The previous manifest is user-editable and its result feeds a deleter, so only
+ * safe relative paths under jars/, classes/ or src/ are returned.
+ */
 export function staleFiles(previous: JavaManifest | null, next: JavaManifest): string[] {
   if (previous === null) return [];
   const keep = producedPaths(next);
-  return [...producedPaths(previous)].filter((p) => !keep.has(p)).sort();
+  return [...producedPaths(previous)]
+    .filter((p) => !keep.has(p) && isSafeRelative(p) && STORE_PREFIXES.some((x) => p.startsWith(x)))
+    .sort();
 }
