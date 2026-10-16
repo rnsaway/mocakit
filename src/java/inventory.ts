@@ -177,7 +177,7 @@ export interface JavaLink {
   source?: string;
 }
 
-/** Link each Java-method command to the classpath entry that provides its class. Keyed by command key. */
+/** Link each command that has a `javaClass` to the classpath entry that provides its class. Keyed by command key. */
 export function linkCommands(
   commands: CommandInfo[],
   manifest: JavaManifest,
@@ -187,23 +187,23 @@ export function linkCommands(
   const links = new Map<string, JavaLink>();
   for (const command of commands) {
     const def = command.active;
-    const isJava = !!def.javaClass || /java/i.test(def.type ?? '');
-    if (!isJava || !def.javaClass) continue;
     const className = def.javaClass;
+    if (!className) continue;
     const method = def.cFunction || undefined;
+    const methodPart = method ? { method } : {};
     const entryPath = classIndex.get(className);
     const record = entryPath === undefined ? undefined : manifest.entries.find((e) => e.path === entryPath);
-    if (entryPath === undefined || !record) {
-      links.set(command.key, { className, ...(method ? { method } : {}), entry: entryPath ?? '', kind: 'unknown', downloaded: false });
+    if (!record || record.kind === undefined) {
+      links.set(command.key, { className, ...methodPart, entry: '', kind: 'unknown', downloaded: false });
       continue;
     }
     const downloaded = record.selected && !record.missing && record.files.length > 0;
     const source = downloaded ? sourceFor(className) : undefined;
     links.set(command.key, {
       className,
-      ...(method ? { method } : {}),
+      ...methodPart,
       entry: record.path,
-      kind: record.kind ?? 'unknown',
+      kind: record.kind,
       downloaded,
       ...(source !== undefined ? { source } : {}),
     });

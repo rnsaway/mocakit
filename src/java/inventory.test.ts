@@ -39,6 +39,15 @@ describe('jarFacts', () => {
     expect(jarFacts(jar).version).toBe('1.4.0');
   });
 
+  it('excludes META-INF classes and module-info', () => {
+    const jar = buildZip({
+      'META-INF/versions/9/com/acme/cust/Widgets.class': 'x',
+      'module-info.class': 'x',
+      'com/acme/cust/Widgets.class': 'x',
+    });
+    expect(jarFacts(jar).classes).toEqual(['com.acme.cust.Widgets']);
+  });
+
   it('reports a corrupt jar as unreadable with a warning', () => {
     const f = jarFacts(new Uint8Array([1, 2, 3, 4]));
     expect(f.readable).toBe(false);
@@ -174,5 +183,40 @@ describe('linkCommands', () => {
       downloaded: false,
     });
     expect(links.has('plain')).toBe(false);
+  });
+
+  it('reports unknown with an empty entry when the entry is not in the manifest or has no kind', () => {
+    const m = {
+      entries: [rec('/opt/acme/cust/nokind.jar', { files: [{ path: 'p', local: 'l', size: 1, sha256: 'h', classes: 1, readable: true }] })],
+    } as unknown as JavaManifest;
+    const idx = new Map([
+      ['com.acme.cust.Gone', '/opt/acme/cust/gone.jar'],
+      ['com.acme.cust.NoKind', '/opt/acme/cust/nokind.jar'],
+    ]);
+    const links = linkCommands(
+      [cmd('gone', 'com.acme.cust.Gone', 'a'), cmd('no kind', 'com.acme.cust.NoKind', 'b')],
+      m,
+      idx,
+      () => 'x.java',
+    );
+    for (const key of ['gone', 'no kind']) {
+      expect(links.get(key)).toMatchObject({ entry: '', kind: 'unknown', downloaded: false });
+      expect(links.get(key)).not.toHaveProperty('source');
+    }
+  });
+
+  it('does not link a java-typed command without a javaClass', () => {
+    const links = linkCommands([cmd('typed', undefined, 'run', 'Java Method')], manifest, index, () => undefined);
+    expect(links.has('typed')).toBe(false);
+  });
+
+  it('omits method when there is no cFunction', () => {
+    const links = linkCommands([cmd('nomethod', 'com.acme.cust.Widgets')], manifest, index, () => undefined);
+    expect(links.get('nomethod')).not.toHaveProperty('method');
+  });
+
+  it('links any command with a javaClass regardless of type', () => {
+    const links = linkCommands([cmd('odd', 'com.acme.cust.Widgets', 'm', 'C Function')], manifest, index, () => undefined);
+    expect(links.get('odd')).toMatchObject({ className: 'com.acme.cust.Widgets', kind: 'custom', downloaded: true });
   });
 });
