@@ -44,6 +44,11 @@ function quotedAll(text: string): string[] {
   return [...text.matchAll(/"([^"]*)"/g)].map((m) => m[1]!);
 }
 
+/** Paths in shell single quotes (posix templates). */
+function singleQuotedAll(text: string): string[] {
+  return [...text.matchAll(/'([^']*)'/g)].map((m) => m[1]!);
+}
+
 /**
  * A fake server that answers exactly the commands the templates in
  * `src/java/os-commands.ts` produce. A command is accepted only when it was
@@ -175,7 +180,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
       (a) => (options.env[a[0] as string] === undefined ? fail(1) : `${options.env[a[0] as string]!}${eol}`),
     );
     add(
-      (c) => /^stat -L -c "%s %n" "(.*)"\/\*\.jar 2>\/dev\/null; true$/.exec(c)?.slice(1) ?? null,
+      (c) => /^stat -L -c "%s %n" '(.*)'\/\*\.jar 2>\/dev\/null; true$/.exec(c)?.slice(1) ?? null,
       (a) => cmds.listJars(a[0] as string),
       (a) =>
         paths
@@ -184,7 +189,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
           .join('') + inject,
     );
     add(
-      (c) => /^find -L "(.*)" -type f -name "\*\.class" -printf "%s %p\\n" 2>\/dev\/null; true$/.exec(c)?.slice(1) ?? null,
+      (c) => /^find -L '(.*)' -type f -name "\*\.class" -printf "%s %p\\n" 2>\/dev\/null; true$/.exec(c)?.slice(1) ?? null,
       (a) => cmds.listClasses(a[0] as string),
       (a) =>
         paths
@@ -195,7 +200,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
     add(
       (c) => {
         const m = /^stat -L -c "%s %n" (.*) 2>\/dev\/null; true$/.exec(c);
-        return m ? [quotedAll(m[1]!)] : null;
+        return m ? [singleQuotedAll(m[1]!)] : null;
       },
       (a) => cmds.statFiles(a[0] as string[]),
       (a) =>
@@ -205,7 +210,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
           .join('') + inject,
     );
     add(
-      (c) => (c.startsWith('sha256sum ') ? [quotedAll(c.slice('sha256sum '.length))] : null),
+      (c) => (c.startsWith('sha256sum ') ? [singleQuotedAll(c.slice('sha256sum '.length))] : null),
       (a) => cmds.checksums(a[0] as string[]),
       (a) =>
         (a[0] as string[])
@@ -213,7 +218,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
           .join(''),
     );
     add(
-      (c) => [[...c.matchAll(/echo "==MOCAKIT-FILE (\d+)=="; base64 -w 0 "([^"]*)"; echo/g)].map((m) => m[2]!)],
+      (c) => [[...c.matchAll(/echo "==MOCAKIT-FILE (\d+)=="; base64 -w 0 '([^']*)'; echo/g)].map((m) => m[2]!)],
       (a) => cmds.readFilesBase64(a[0] as string[]),
       (a) =>
         (a[0] as string[])
@@ -225,7 +230,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
     );
     add(
       (c) => {
-        const m = /^tail -c \+(\d+) "([^"]*)" \| head -c (\d+) \| base64 -w 0$/.exec(c);
+        const m = /^tail -c \+(\d+) '([^']*)' \| head -c (\d+) \| base64 -w 0$/.exec(c);
         return m ? [m[2]!, Number(m[1]) - 1, Number(m[3])] : null;
       },
       (a) => cmds.readRangeBase64(a[0] as string, a[1] as number, a[2] as number),
@@ -240,7 +245,7 @@ export function fakeOs(options: FakeOsOptions): { exec: OsExec; commands: string
       () => (options.unzip === false ? '' : `/usr/bin/unzip${eol}`),
     );
     add(
-      (c) => /^unzip -Z1 "(.*)"$/.exec(c)?.slice(1) ?? null,
+      (c) => /^unzip -Z1 '(.*)'$/.exec(c)?.slice(1) ?? null,
       (a) => cmds.listZip(a[0] as string),
       (a) => {
         if (options.unzip === false) fail(127);

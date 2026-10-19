@@ -766,7 +766,8 @@ async function filesUnder(root: string): Promise<Map<string, string>> {
   return out;
 }
 
-describe('runGenerate with Java introspection', () => {
+// These runs spawn the fake decompiler (a node process per input), which is slow on a busy machine.
+describe('runGenerate with Java introspection', { timeout: 30_000 }, () => {
   const env = { MOCA_URL: 'https://moca.test/service', MOCA_USER: 'u', MOCA_PASSWORD: 'p' };
   const decompilerConfig = { java: { decompiler: { command: process.execPath, args: [FAKE_DECOMPILER, '{input}', '{output}'] } } };
 
@@ -859,6 +860,23 @@ describe('runGenerate with Java introspection', () => {
     for (const f of ['src/moca.commands.json', 'src/moca.generated.ts', 'src/moca-commands/INDEX.md', 'src/moca-java']) {
       expect(await exists(join(dir, f))).toBe(false);
     }
+  });
+
+  it('lists, downloads and verifies inner-class files whose names contain $', async () => {
+    const dir = await tempDir();
+    const inner = new Uint8Array([0xca, 0xfe, 0xba, 0xbe, 1]);
+    const files = { ...javaFiles(), '/opt/acme/cust/build/classes/com/acme/cust/Widget$1.class': inner };
+    const server = javaServer({ files, env: { LESDIR: '/opt/acme/cust', CLASSPATH: `${JAVA_CLASSPATH}:/opt/acme/cust/build/classes` } });
+    const { io: cliIo, out, err } = io();
+    await runGenerate({ java: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: server.transport } });
+    expect(out).toContain('Downloaded 4 files (0.0 MB, 0 unchanged)');
+    expect(err.filter((l) => l.includes('$'))).toEqual([]);
+    expect(server.os.commands.some((c) => c.startsWith('sha256sum ') && c.includes("'/opt/acme/cust/build/classes/com/acme/cust/Widget$1.class'"))).toBe(true);
+    expect(new Uint8Array(await readFile(join(dir, 'src/moca-java/classes/cust/build/classes/com/acme/cust/Widget$1.class')))).toEqual(inner);
+    const manifest = JSON.parse(await readFile(join(dir, 'src/moca-java/manifest.json'), 'utf8'));
+    const entry = manifest.entries.find((e: { path: string }) => e.path === '/opt/acme/cust/build/classes');
+    expect(entry.files.map((f: { local: string }) => f.local)).toEqual(['classes/cust/build/classes/com/acme/cust/Widget$1.class']);
+    expect(await readFile(join(dir, 'src/moca-java/entries/cust/build-classes.md'), 'utf8')).toContain('`Widget$1`');
   });
 
   it('fails, writing nothing, when the decompiler cannot be started', async () => {

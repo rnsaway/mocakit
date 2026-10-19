@@ -23,7 +23,11 @@ describe('isSafePath', () => {
     expect(isSafePath('/opt/acme/cust lib/a.jar')).toBe(true);
     expect(isSafePath('C:\\acme\\cust\\lib\\a.jar')).toBe(true);
   });
-  it.each(["'", '"', '$', '`', ';', '|', '&', '\n', '>', '%'])('rejects %j', (ch) => {
+  it('accepts $ (inner-class files)', () => {
+    expect(isSafePath('/opt/acme/cust/build/classes/com/acme/cust/Widget$1.class')).toBe(true);
+    expect(isSafePath('C:\\acme\\classes\\Widget$Inner.class')).toBe(true);
+  });
+  it.each(["'", '"', '`', ';', '|', '&', '\n', '>', '%'])('rejects %j', (ch) => {
     expect(isSafePath(`/opt/acme/a${ch}b.jar`)).toBe(false);
   });
   it('rejects the empty path', () => {
@@ -89,14 +93,32 @@ describe.each([
     const w = os.family === 'windows';
     const sp = w ? 'C:\\acme\\cust lib\\a.jar' : '/opt/acme/cust lib/a.jar';
     const dir = w ? 'C:\\acme\\cust lib' : '/opt/acme/cust lib';
-    expect(os.listJars(dir)).toContain(`"${dir}`);
-    expect(os.listClasses(dir)).toContain(`"${dir}"`);
-    expect(os.statFiles([sp])).toContain(`"${sp}"`);
-    expect(os.checksums([sp])).toContain(`"${sp}"`);
-    if (!w) expect(os.listZip(sp)).toContain(`"${sp}"`);
-    // powershell scripts use single quotes inside the double-quoted -Command
-    expect(os.readFilesBase64([sp])).toContain(w ? `'${sp}'` : `"${sp}"`);
-    expect(os.readRangeBase64(sp, 0, 5)).toContain(w ? `'${sp}'` : `"${sp}"`);
+    // posix: shell single quotes; windows: cmd double quotes
+    const q = (p: string) => (w ? `"${p}"` : `'${p}'`);
+    expect(os.listJars(dir)).toContain(w ? `"${dir}` : `'${dir}'`);
+    expect(os.listClasses(dir)).toContain(q(dir));
+    expect(os.statFiles([sp])).toContain(q(sp));
+    expect(os.checksums([sp])).toContain(q(sp));
+    if (!w) expect(os.listZip(sp)).toContain(q(sp));
+    // powershell scripts use single-quoted strings inside the -Command; posix uses shell single quotes
+    expect(os.readFilesBase64([sp])).toContain(`'${sp}'`);
+    expect(os.readRangeBase64(sp, 0, 5)).toContain(`'${sp}'`);
+  });
+  it('keeps $ literal: single quotes on posix, PowerShell single-quoted strings on windows', () => {
+    const w = os.family === 'windows';
+    const p = w ? 'C:\\acme\\classes\\Widget$1.class' : '/opt/acme/cust/build/classes/com/acme/cust/Widget$1.class';
+    const dir = w ? 'C:\\acme\\$lib' : '/opt/acme/$lib';
+    const all = [os.statFiles([p]), os.checksums([p]), os.readFilesBase64([p]), os.readRangeBase64(p, 0, 5), os.listClasses(dir), os.listJars(dir)];
+    if (!w) {
+      for (const cmd of all) expect(cmd.replace(/'[^']*'/g, '')).not.toContain('$'); // every $ is inside single quotes
+      expect(os.statFiles([p])).toContain(`'${p}'`);
+      expect(os.listZip(p)).toBe(`unzip -Z1 '${p}'`);
+      expect(os.listJars(dir)).toBe(`stat -L -c "%s %n" '${dir}'/*.jar 2>/dev/null; true`);
+    } else {
+      expect(os.readFilesBase64([p])).toContain(`@('${p}')`);
+      expect(os.readRangeBase64(p, 0, 5)).toContain(`$p='${p}';`);
+      expect(os.statFiles([p])).toContain(`"${p}"`);
+    }
   });
   it('throws on an unsafe path', () => {
     const bad = "/a/b'; rm -rf /";
@@ -129,23 +151,23 @@ describe('POSIX templates', () => {
     expect(POSIX.family).toBe('posix');
     expect(POSIX.classpathSeparator).toBe(':');
     expect(POSIX.readVar('LESDIR')).toBe('printenv LESDIR');
-    expect(POSIX.listJars('/a/lib')).toBe('stat -L -c "%s %n" "/a/lib"/*.jar 2>/dev/null; true');
+    expect(POSIX.listJars('/a/lib')).toBe(`stat -L -c "%s %n" '/a/lib'/*.jar 2>/dev/null; true`);
     expect(POSIX.listClasses('/a/c')).toBe(
-      'find -L "/a/c" -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true',
+      `find -L '/a/c' -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true`,
     );
     expect(POSIX.statFiles(['/a/x.jar', '/a/y z.jar'])).toBe(
-      'stat -L -c "%s %n" "/a/x.jar" "/a/y z.jar" 2>/dev/null; true',
+      `stat -L -c "%s %n" '/a/x.jar' '/a/y z.jar' 2>/dev/null; true`,
     );
-    expect(POSIX.checksums(['/a/x.jar', '/a/y.jar'])).toBe('sha256sum "/a/x.jar" "/a/y.jar"');
+    expect(POSIX.checksums(['/a/x.jar', '/a/y.jar'])).toBe(`sha256sum '/a/x.jar' '/a/y.jar'`);
     expect(POSIX.readFilesBase64(['/a/x.jar', '/a/y.jar'])).toBe(
-      'echo "==MOCAKIT-FILE 0=="; base64 -w 0 "/a/x.jar"; echo; echo "==MOCAKIT-FILE 1=="; base64 -w 0 "/a/y.jar"; echo',
+      `echo "==MOCAKIT-FILE 0=="; base64 -w 0 '/a/x.jar'; echo; echo "==MOCAKIT-FILE 1=="; base64 -w 0 '/a/y.jar'; echo`,
     );
     expect(POSIX.readRangeBase64('/a/b.jar', 0, 1048576)).toBe(
-      'tail -c +1 "/a/b.jar" | head -c 1048576 | base64 -w 0',
+      `tail -c +1 '/a/b.jar' | head -c 1048576 | base64 -w 0`,
     );
-    expect(POSIX.readRangeBase64('/a/b.jar', 9, 5)).toBe('tail -c +10 "/a/b.jar" | head -c 5 | base64 -w 0');
+    expect(POSIX.readRangeBase64('/a/b.jar', 9, 5)).toBe(`tail -c +10 '/a/b.jar' | head -c 5 | base64 -w 0`);
     expect(POSIX.hasUnzip()).toBe('command -v unzip; true');
-    expect(POSIX.listZip('/a/b.jar')).toBe('unzip -Z1 "/a/b.jar"');
+    expect(POSIX.listZip('/a/b.jar')).toBe(`unzip -Z1 '/a/b.jar'`);
   });
 });
 
@@ -284,7 +306,8 @@ describe('isUsablePath', () => {
     expect(isUsablePath('posix', '/opt/acme/a.jar')).toBe(true);
     expect(isUsablePath('posix', 'opt/acme/a.jar')).toBe(false);
     expect(isUsablePath('posix', '/opt/acme\\a.jar')).toBe(false);
-    expect(isUsablePath('posix', '/opt/acme/a$b.jar')).toBe(false);
+    expect(isUsablePath('posix', '/opt/acme/a$b.jar')).toBe(true);
+    expect(isUsablePath('posix', "/opt/acme/a'b.jar")).toBe(false);
   });
   it('accepts any safe path on windows', () => {
     expect(isUsablePath('windows', 'C:\\acme\\a.jar')).toBe(true);

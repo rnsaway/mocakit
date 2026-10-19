@@ -8,8 +8,12 @@ import type { MocaRow } from '../types.js';
 
 export type OsFamily = 'posix' | 'windows';
 
-/** Paths are only used when every character is in this set. */
-export const SAFE_PATH = /^[A-Za-z0-9._/\\:+@ -]+$/;
+/**
+ * Paths are only used when every character is in this set. `$` is allowed (inner-class files such
+ * as `Widget$1.class`): posix paths sit in shell single quotes, windows paths in cmd double quotes
+ * or PowerShell single-quoted strings, and `$` is literal in all three. `'`, `"` and `%` are never allowed.
+ */
+export const SAFE_PATH = /^[A-Za-z0-9._/\\:+@ $-]+$/;
 
 const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -62,7 +66,7 @@ function safeList(paths: string[]): string[] {
   return paths.map(safe);
 }
 
-/** Posix paths sit inside bash double quotes: no backslash (it can escape the closing quote), and absolute so a leading "-" is never read as an option. */
+/** Posix paths sit inside shell single quotes (`$` stays literal): no backslash, and absolute so a leading "-" is never read as an option. */
 function safePosix(path: string): string {
   safe(path);
   if (path.includes('\\') || !path.startsWith('/')) {
@@ -92,27 +96,30 @@ function stripTrailingSeparators(dir: string, seps: RegExp): string {
   return t === '' ? d : t;
 }
 
+/** cmd.exe double quotes (windows). */
 const quoted = (p: string): string => `"${p}"`;
+/** Shell single quotes (posix); SAFE_PATH excludes `'`, so nothing can close them early. */
+const sq = (p: string): string => `'${p}'`;
 
 export const POSIX: OsCommands = {
   family: 'posix',
   classpathSeparator: ':',
   readVar: (name) => `printenv ${safeName(name)}`,
-  listJars: (dir) => `stat -L -c "%s %n" "${stripTrailingSeparators(safePosix(dir), /\/+$/)}"/*.jar 2>/dev/null; true`,
+  listJars: (dir) => `stat -L -c "%s %n" ${sq(stripTrailingSeparators(safePosix(dir), /\/+$/))}/*.jar 2>/dev/null; true`,
   listClasses: (dir) =>
-    `find -L "${safePosix(dir)}" -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true`,
-  statFiles: (paths) => `stat -L -c "%s %n" ${safePosixList(paths).map(quoted).join(' ')} 2>/dev/null; true`,
-  checksums: (paths) => `sha256sum ${safePosixList(paths).map(quoted).join(' ')}`,
+    `find -L ${sq(safePosix(dir))} -type f -name "*.class" -printf "%s %p\\n" 2>/dev/null; true`,
+  statFiles: (paths) => `stat -L -c "%s %n" ${safePosixList(paths).map(sq).join(' ')} 2>/dev/null; true`,
+  checksums: (paths) => `sha256sum ${safePosixList(paths).map(sq).join(' ')}`,
   readFilesBase64: (paths) =>
     safePosixList(paths)
-      .map((p, i) => `echo "${FILE_SEPARATOR(i)}"; base64 -w 0 "${p}"; echo`)
+      .map((p, i) => `echo "${FILE_SEPARATOR(i)}"; base64 -w 0 ${sq(p)}; echo`)
       .join('; '),
   readRangeBase64: (path, offset, length) => {
     checkRange(offset, length);
-    return `tail -c +${offset + 1} "${safePosix(path)}" | head -c ${length} | base64 -w 0`;
+    return `tail -c +${offset + 1} ${sq(safePosix(path))} | head -c ${length} | base64 -w 0`;
   },
   hasUnzip: () => 'command -v unzip; true',
-  listZip: (path) => `unzip -Z1 "${safePosix(path)}"`,
+  listZip: (path) => `unzip -Z1 ${sq(safePosix(path))}`,
 };
 
 const PS_PREFIX = 'powershell -NoProfile -Command';

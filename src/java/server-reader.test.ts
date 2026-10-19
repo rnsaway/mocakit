@@ -174,19 +174,19 @@ describe('readJavaServer (posix)', () => {
   });
 
   it('skips a listed file with an unsafe path with a warning', async () => {
-    const files = { ...posixFiles(), '/opt/acme/cust/lib/odd$name.jar': WIDGETS };
+    const files = { ...posixFiles(), '/opt/acme/cust/lib/odd%name.jar': WIDGETS };
     const fake = fakeOs(posix({ files }));
     const read = await readJavaServer(fake.exec, defaults);
     expect(pathsOf(read).some((p) => p.includes('odd'))).toBe(false);
-    expect(read.warnings.some((w) => w.includes('/opt/acme/cust/lib/odd$name.jar'))).toBe(true);
+    expect(read.warnings.some((w) => w.includes('/opt/acme/cust/lib/odd%name.jar'))).toBe(true);
     expect(fake.commands.some((c) => c.includes('odd'))).toBe(false);
   });
 
   it('skips an unsafe classpath entry with a warning instead of throwing', async () => {
-    const env = { LESDIR: '/opt/acme/cust', CLASSPATH: '/opt/acme/cust/lib/*:/opt/acme/cust/we$ird.jar' };
+    const env = { LESDIR: '/opt/acme/cust', CLASSPATH: '/opt/acme/cust/lib/*:/opt/acme/cust/we%ird.jar' };
     const fake = fakeOs(posix({ env }));
     const read = await readJavaServer(fake.exec, defaults);
-    expect(read.warnings.some((w) => w.includes('/opt/acme/cust/we$ird.jar'))).toBe(true);
+    expect(read.warnings.some((w) => w.includes('/opt/acme/cust/we%ird.jar'))).toBe(true);
     expect(pathsOf(read)).toEqual(['/opt/acme/cust/lib/widgets.jar']);
   });
 
