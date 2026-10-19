@@ -1,6 +1,6 @@
 import type { ConverterConfig } from './context/convert-external.js';
 
-/** Opt-in database schema introspection (tables, views, columns). */
+/** Database schema introspection (tables, views, columns). On by default; `schema: false` turns it off. */
 export interface SchemaConfig {
   /** Table/view name globs (`*`, `?`), case-insensitive. Default `['*']`. */
   include?: string[];
@@ -127,7 +127,7 @@ export interface MocakitConfig {
   exclude?: string[];
   /** Component-level allowlist, case-insensitive. */
   levels?: string[];
-  /** `true` or an object enables schema introspection; see `SchemaConfig`. Default off. */
+  /** Schema introspection; see `SchemaConfig`. Default on; `false` turns it off. */
   schema?: boolean | SchemaConfig;
   /** `true` or an object enables command docs (moca-commands/); see `CommandDocsConfig`. Default off. */
   commandDocs?: boolean | CommandDocsConfig;

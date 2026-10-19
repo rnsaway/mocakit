@@ -29,6 +29,10 @@ All notable changes to mocakit are documented here. The format follows
 
 ### Changed
 
+- **Schema introspection is on by default.** `mocakit generate` now writes `moca.schema.json`, `moca.schema.ts` and
+  `moca-schema/` unless the config sets `schema: false` or you pass `--no-schema`. A `--from-snapshot` run without a
+  schema snapshot skips schema (and logs `Skipped schema: …`) unless `schema` is set in the config or `--schema` is
+  passed, in which case the missing file is still an error.
 - mocakit is now described as an agentic development toolkit: the README opens with how a developer generates the
   files and an AI coding agent builds from them offline, without touching the server.
 

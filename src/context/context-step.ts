@@ -108,7 +108,7 @@ function convertersOf(value: unknown): Record<string, ConverterConfig> {
       throw new Error(`${name} must be an object with a command string and an args array of strings`);
     }
     if (config.output !== undefined && config.output !== 'markdown' && config.output !== 'text') {
-      throw new Error(`${name}.output must be 'markdown' or 'text'`);
+      throw new Error(`${name}.output must be "markdown" or "text"`);
     }
     if (config.timeoutMs !== undefined && !isPositive(config.timeoutMs)) throw new Error(`${name}.timeoutMs must be a positive number`);
     result[ext] = {

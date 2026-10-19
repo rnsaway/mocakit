@@ -374,10 +374,10 @@ type). These are type-only assertions; nothing checks them at runtime.
 ## Schema types, agent docs & moca.from()
 
 `mocakit generate` can also read your WMS database's tables, views and columns (SQL Server or Oracle) and produce
-typed table definitions, agent-readable docs and a small typed query helper. It is opt-in: nothing changes until you
-enable it.
+typed table definitions, agent-readable docs and a small typed query helper. It is on by default; set
+`schema: false` in the config (or pass `--no-schema`) to turn it off.
 
-### Enabling it
+### Configuring it
 
 ```ts
 // mocakit.config.ts
@@ -385,7 +385,7 @@ import { defineConfig } from 'mocakit';
 
 export default defineConfig({
   out: 'src/moca.generated.ts',
-  schema: true, // or an object with any of these options (defaults shown):
+  // schema: false turns it off; an object sets any of these options (defaults shown):
   // schema: {
   //   include: ['*'],                 // table/view name globs, case-insensitive
   //   exclude: [],                    // e.g. ['*_bak', 'tmp_*']
@@ -398,9 +398,11 @@ export default defineConfig({
 });
 ```
 
-`mocakit generate --schema` enables it for one run; `--no-schema` disables it for one run even if the config enables it.
+`--no-schema` turns it off for one run; `--schema` turns it on for one run even if the config sets `schema: false`.
 `--dry-run` reports counts and writes nothing. `--from-snapshot <moca.commands.json>` also reads the committed
-`moca.schema.json` from its configured location; no server is contacted.
+`moca.schema.json` from its configured location; no server is contacted. If that file doesn't exist and schema is
+on only by default, the run skips schema and says so; with `schema` in the config or `--schema`, a missing file is
+an error.
 
 ### Outputs
 

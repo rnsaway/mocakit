@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { MocaClient, type MocaClientDeps } from '../client/client.js';
@@ -111,9 +111,11 @@ export interface ResolvedSchema {
   /** `null` when docs are disabled. */
   docs: string | null;
   filter: SchemaFilter;
+  /** True when enabled by `--schema` or the config; false when on only by default. */
+  explicit: boolean;
 }
 
-/** Schema settings from config + CLI flag, or `null` when schema introspection is off. */
+/** Schema settings from config + CLI flag, or `null` when schema introspection is off. On by default. */
 export function resolveSchemaSettings(
   config: MocakitConfig,
   flag: boolean | undefined,
@@ -124,7 +126,7 @@ export function resolveSchemaSettings(
   if (setting !== undefined && typeof setting !== 'boolean' && (typeof setting !== 'object' || setting === null || Array.isArray(setting))) {
     throw new Error('config.schema must be true, false or an object');
   }
-  if (flag === false || (flag === undefined && !setting)) return null;
+  if (flag === false || (flag === undefined && setting === false)) return null;
   const options: SchemaConfig = typeof setting === 'object' ? setting : {};
   const near = (file: string) => resolve(dirname(out), file);
   const fromConfig = (path: string) => resolve(configDir, path);
@@ -133,6 +135,7 @@ export function resolveSchemaSettings(
     out: options.out !== undefined ? fromConfig(options.out) : near('moca.schema.ts'),
     docs: options.docs === false ? null : options.docs !== undefined ? fromConfig(options.docs) : near('moca-schema'),
     filter: { include: options.include, exclude: options.exclude, views: options.views },
+    explicit: flag === true || setting !== undefined,
   };
 }
 
@@ -140,6 +143,15 @@ export function resolveSchemaSettings(
 export function moduleSpecifier(fromFile: string, toFile: string): string {
   const path = relative(dirname(fromFile), toFile).split(sep).join('/').replace(/\.(m?)ts$/, '.$1js');
   return path.startsWith('.') ? path : `./${path}`;
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readSchemaFile(path: string): Promise<SchemaSnapshot> {
@@ -168,7 +180,12 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   const out = options.out !== undefined ? resolve(cwd, options.out) : resolve(configDir, config.out ?? DEFAULT_OUT);
   const snapshotPath =
     config.snapshot !== undefined ? resolve(configDir, config.snapshot) : resolve(dirname(out), 'moca.commands.json');
-  const schema = resolveSchemaSettings(config, options.schema, configDir, out);
+  let schema = resolveSchemaSettings(config, options.schema, configDir, out);
+  // On only by default: a snapshot run without a schema snapshot skips schema instead of failing.
+  if (schema !== null && !schema.explicit && options.fromSnapshot !== undefined && !(await fileExists(schema.snapshot))) {
+    io.log(`Skipped schema: ${schema.snapshot} does not exist (--from-snapshot)`);
+    schema = null;
+  }
   const commandDocs = resolveCommandDocsSettings(config, options.commandDocs, configDir, out);
   const codesSettings = resolveCodesSettings(config, schema !== null);
   const api = resolveApiSettings(config, options.api, configDir, out);

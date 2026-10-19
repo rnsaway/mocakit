@@ -75,7 +75,7 @@ describe('resolveContextSettings', () => {
     ['converters', { context: { converters: [] } }, 'context.converters must be an object'],
     ['a converter key', { context: { converters: { PDF: { command: 'x', args: [] } } } }, 'context.converters keys must be lowercase extensions with the dot, e.g. ".pdf"'],
     ['a converter', { context: { converters: { '.pdf': { command: '', args: [] } } } }, 'context.converters[".pdf"] must be an object with a command string and an args array of strings'],
-    ['a converter output', { context: { converters: { '.pdf': { command: 'x', args: [], output: 'html' } } } }, `context.converters[".pdf"].output must be 'markdown' or 'text'`],
+    ['a converter output', { context: { converters: { '.pdf': { command: 'x', args: [], output: 'html' } } } }, `context.converters[".pdf"].output must be "markdown" or "text"`],
     ['a converter timeout', { context: { converters: { '.pdf': { command: 'x', args: [], timeoutMs: -1 } } } }, 'context.converters[".pdf"].timeoutMs must be a positive number'],
   ])('rejects an invalid %s', (_name, config, message) => {
     expect(() => resolveContextSettings(config as unknown as MocakitConfig, undefined, '/proj', out)).toThrow(message);

@@ -125,7 +125,7 @@ describe('runCli .env loading', () => {
     await writeFile(join(dir, '.env'), DOTENV);
     const fake = fakeServer();
     const { io, out, err } = capture();
-    expect(await runCli(['generate', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
+    expect(await runCli(['generate', '--no-schema', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
     expect(out[0]).toBe(`Loaded 3 variables from ${join(dir, '.env')}`);
     expect(out.at(-1)).toBe(`Wrote 1 commands to ${join(dir, 'moca.ts')}`);
     expect(fake.requests[0]?.url).toMatch(/^https:\/\/file\.moca\.test\/service/);
@@ -142,7 +142,7 @@ describe('runCli .env loading', () => {
     vi.stubEnv('MOCA_USER', 'realuser');
     const fake = fakeServer();
     const { io } = capture();
-    expect(await runCli(['generate', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
+    expect(await runCli(['generate', '--no-schema', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
     expect(fake.requests[0]?.url).toMatch(/^https:\/\/real\.moca\.test\/service/);
     expect(fake.requests[0]?.query).toContain("usr_id = 'realuser'");
     expect(process.env.MOCA_USER).toBe('realuser');
@@ -174,7 +174,7 @@ describe('runCli .env loading', () => {
     const fake = fakeServer();
     const { io, out } = capture();
     expect(
-      await runCli(['generate', '--env-file', 'moca.local.env', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } }),
+      await runCli(['generate', '--no-schema', '--env-file', 'moca.local.env', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } }),
     ).toBe(0);
     expect(out[0]).toBe(`Loaded 3 variables from ${join(dir, 'moca.local.env')}`);
     expect(fake.requests[0]?.query).toContain("usr_id = 'fileuser'");
@@ -214,7 +214,7 @@ describe('runCli .env loading', () => {
     await writeFile(join(dir, '.env'), `${DOTENV}this line is garbage ${PASSWORD}-garbage\n`);
     const fake = fakeServer();
     const { io, out, err } = capture();
-    expect(await runCli(['generate', '--out', 'moca.ts', '--verbose'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
+    expect(await runCli(['generate', '--no-schema', '--out', 'moca.ts', '--verbose'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
     expect(out[0]).toBe(`Loaded 3 variables from ${join(dir, '.env')}: MOCA_PASSWORD, MOCA_URL, MOCA_USER`);
     const all = [...out, ...err].join('\n');
     expect(all).not.toContain(PASSWORD);
@@ -235,7 +235,7 @@ describe('runCli .env loading', () => {
     await writeFile(join(dir, '.env'), `﻿${DOTENV.replace(/\n/g, '\r\n')}`);
     const fake = fakeServer();
     const { io, out } = capture();
-    expect(await runCli(['generate', '--out', 'moca.ts', '--verbose'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
+    expect(await runCli(['generate', '--no-schema', '--out', 'moca.ts', '--verbose'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
     expect(out[0]).toBe(`Loaded 3 variables from ${join(dir, '.env')}: MOCA_PASSWORD, MOCA_URL, MOCA_USER`);
     expect(fake.requests[0]?.url).toMatch(/^https:\/\/file\.moca\.test\/service/);
     expect(fake.requests[0]?.query).toBe(`login user where usr_id = 'fileuser' and usr_pswd = '${PASSWORD}'`);
