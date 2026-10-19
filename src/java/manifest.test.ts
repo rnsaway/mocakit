@@ -16,8 +16,8 @@ import {
 
 const sha = (b: string) => createHash('sha256').update(b).digest('hex');
 
-function entriesFor(cp: string, sep: ':' | ';', les: string, fam: 'posix' | 'windows') {
-  return selectEntries(parseClasspath(cp, sep), ['$LESDIR'], new Map([['LESDIR', les]]), fam).entries;
+function entriesFor(cp: string, sep: ':' | ';', lesDir: string, fam: 'posix' | 'windows') {
+  return selectEntries(parseClasspath(cp, sep), ['$LESDIR'], new Map([['LESDIR', lesDir]]), fam).entries;
 }
 
 const LES = '/opt/acme/cust';
@@ -54,14 +54,14 @@ describe('localPathFor', () => {
     );
   });
   it('uses the lesDir to find the component folder when its name repeats in an ancestor', () => {
-    const les = '/opt/cust/acme/cust';
-    const e = entriesFor('/opt/cust/acme/cust/lib/*', ':', les, 'posix');
-    expect(localPathFor(e[0], '/opt/cust/acme/cust/lib/a.jar', 'posix', les)).toBe('jars/cust/lib/a.jar');
+    const lesDir = '/opt/cust/acme/cust';
+    const e = entriesFor('/opt/cust/acme/cust/lib/*', ':', lesDir, 'posix');
+    expect(localPathFor(e[0], '/opt/cust/acme/cust/lib/a.jar', 'posix', lesDir)).toBe('jars/cust/lib/a.jar');
   });
   it('handles a windows lesDir with an ancestor of the same name, case-insensitively', () => {
-    const les = 'C:\\cust\\acme\\cust';
-    const e = entriesFor('C:\\cust\\acme\\cust\\lib\\*', ';', les, 'windows');
-    expect(localPathFor(e[0], 'c:\\CUST\\acme\\cust\\lib\\a.jar', 'windows', les)).toBe('jars/cust/lib/a.jar');
+    const lesDir = 'C:\\cust\\acme\\cust';
+    const e = entriesFor('C:\\cust\\acme\\cust\\lib\\*', ';', lesDir, 'windows');
+    expect(localPathFor(e[0], 'c:\\CUST\\acme\\cust\\lib\\a.jar', 'windows', lesDir)).toBe('jars/cust/lib/a.jar');
   });
   it('throws when the path would escape the folder', () => {
     expect(() => localPathFor(posix[0], '/opt/acme/cust/lib/../../x.jar', 'posix', LES)).toThrow();

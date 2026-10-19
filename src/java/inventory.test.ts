@@ -104,11 +104,11 @@ describe('overriddenClasses', () => {
     const classes = ['com.acme.B', 'com.acme.A', 'com.acme.A$In'];
     const out = overriddenClasses([
       { path: '/opt/acme/cust/lib/x-1.0.jar', file: '/opt/acme/cust/lib/x-1.0.jar', classes },
-      { path: '/opt/acme/cust/javalib/x-1.0.jar', file: '/opt/acme/cust/javalib/x-1.0.jar', classes },
+      { path: '/opt/acme/cust/extlib/x-1.0.jar', file: '/opt/acme/cust/extlib/x-1.0.jar', classes },
       { path: '/opt/acme/cust/unknown.jar', classes: null },
     ]);
     const w = '/opt/acme/cust/lib/x-1.0.jar';
-    const l = ['/opt/acme/cust/javalib/x-1.0.jar'];
+    const l = ['/opt/acme/cust/extlib/x-1.0.jar'];
     expect(out).toEqual([
       { className: 'com.acme.A', winner: w, losers: l },
       { className: 'com.acme.B', winner: w, losers: l },

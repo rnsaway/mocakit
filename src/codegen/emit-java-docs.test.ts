@@ -10,7 +10,7 @@ const manifest: JavaManifest = {
   generatedAt: '2026-01-01T00:00:00Z',
   server: 'https://u:p@moca.test/service',
   os: 'posix',
-  lesDir: '/opt/acme/les',
+  lesDir: '/opt/acme/cust',
   roots: ['$LESDIR'],
   entries: [
     {

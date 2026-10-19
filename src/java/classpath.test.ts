@@ -7,7 +7,7 @@ const vars = (lesDir: string, extra: Record<string, string> = {}) => new Map(Obj
 const V = vars(LES);
 const CP = [
   '/opt/acme/cust/lib/*',
-  '/opt/acme/cust/javalib/*',
+  '/opt/acme/cust/extlib/*',
   '/opt/acme/cust/build/classes',
   '/opt/acme/core/lib/*',
   '/opt/acme/core/lib/single.jar',
@@ -20,7 +20,7 @@ describe('parseClasspath', () => {
   it('types entries and drops empties and duplicates', () => {
     expect(entries.map((e) => [e.index, e.path, e.type])).toEqual([
       [0, '/opt/acme/cust/lib', 'dir-wildcard'],
-      [1, '/opt/acme/cust/javalib', 'dir-wildcard'],
+      [1, '/opt/acme/cust/extlib', 'dir-wildcard'],
       [2, '/opt/acme/cust/build/classes', 'dir'],
       [3, '/opt/acme/core/lib', 'dir-wildcard'],
       [4, '/opt/acme/core/lib/single.jar', 'jar'],
@@ -94,7 +94,7 @@ describe('roots and selection', () => {
   });
   it('builds slugs', () => {
     const sel = pick(entries, ['$LESDIR', 'core'], V, 'posix');
-    expect(sel.map((e) => e.slug)).toEqual(['lib', 'javalib', 'build-classes', 'lib', 'lib-single']);
+    expect(sel.map((e) => e.slug)).toEqual(['lib', 'extlib', 'build-classes', 'lib', 'lib-single']);
   });
   it('numbers colliding slugs in index order', () => {
     const e = parseClasspath('/opt/acme/cust/lib/*:/opt/acme/cust/lib:/opt/acme/cust/lib.jar', ':');
@@ -109,27 +109,27 @@ describe('fileSlug', () => {
     expect(fileSlug(sel[2], '/opt/acme/cust/build/classes/com/acme/W.class', 'posix')).toBe('build-classes');
     expect(fileSlug(sel[4], '/opt/acme/core/lib/single.jar', 'posix')).toBe('lib-single');
   });
-  it('keeps same-named JARs in lib and javalib apart', () => {
+  it('keeps same-named JARs in lib and extlib apart', () => {
     expect(fileSlug(sel[0], '/opt/acme/cust/lib/x-1.0.jar', 'posix')).toBe('lib-x-1.0');
-    expect(fileSlug(sel[1], '/opt/acme/cust/javalib/x-1.0.jar', 'posix')).toBe('javalib-x-1.0');
+    expect(fileSlug(sel[1], '/opt/acme/cust/extlib/x-1.0.jar', 'posix')).toBe('extlib-x-1.0');
   });
 });
 
 describe('windows', () => {
   const cp = 'C:\\acme\\cust\\lib\\*;C:\\acme\\cust\\build\\classes';
-  const les = 'C:\\acme\\cust';
+  const lesDir = 'C:\\acme\\cust';
   const entries = parseClasspath(cp, ';');
   it('parses and selects case-insensitively', () => {
     expect(entries.map((e) => [e.path, e.type])).toEqual([
       ['C:\\acme\\cust\\lib', 'dir-wildcard'],
       ['C:\\acme\\cust\\build\\classes', 'dir'],
     ]);
-    const sel = pick(entries, ['c:\\ACME\\Cust'], vars(les), 'windows');
+    const sel = pick(entries, ['c:\\ACME\\Cust'], vars(lesDir), 'windows');
     expect(sel.map((e) => [e.component, e.selected, e.slug])).toEqual([
       ['cust', true, 'lib'],
       ['cust', true, 'build-classes'],
     ]);
-    expect(resolveRoots(['$LESDIR', 'core'], vars(les), 'windows')).toEqual(['C:\\acme\\cust', 'C:\\acme\\core']);
+    expect(resolveRoots(['$LESDIR', 'core'], vars(lesDir), 'windows')).toEqual(['C:\\acme\\cust', 'C:\\acme\\core']);
     expect(fileSlug(sel[0], 'C:\\acme\\cust\\lib\\x-1.0.jar', 'windows')).toBe('lib-x-1.0');
   });
 });
