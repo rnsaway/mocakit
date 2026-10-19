@@ -17,7 +17,7 @@ import {
 const sha = (b: string) => createHash('sha256').update(b).digest('hex');
 
 function entriesFor(cp: string, sep: ':' | ';', les: string, fam: 'posix' | 'windows') {
-  return selectEntries(parseClasspath(cp, sep), ['$LESDIR'], les, fam).entries;
+  return selectEntries(parseClasspath(cp, sep), ['$LESDIR'], new Map([['LESDIR', les]]), fam).entries;
 }
 
 const LES = '/opt/acme/cust';

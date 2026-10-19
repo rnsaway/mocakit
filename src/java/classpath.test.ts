@@ -3,6 +3,8 @@ import { fileSlug, parseClasspath, resolveRoots, selectEntries } from './classpa
 
 const pick = (...a: Parameters<typeof selectEntries>) => selectEntries(...a).entries;
 const LES = '/opt/acme/cust';
+const vars = (lesDir: string, extra: Record<string, string> = {}) => new Map(Object.entries({ LESDIR: lesDir, ...extra }));
+const V = vars(LES);
 const CP = [
   '/opt/acme/cust/lib/*',
   '/opt/acme/cust/javalib/*',
@@ -30,14 +32,30 @@ describe('parseClasspath', () => {
 describe('roots and selection', () => {
   const entries = parseClasspath(CP, ':');
   it('resolves roots', () => {
-    expect(resolveRoots(['$LESDIR', 'core', '/x/y'], LES, 'posix')).toEqual([
+    expect(resolveRoots(['$LESDIR', 'core', '/x/y'], V, 'posix')).toEqual([
       '/opt/acme/cust',
       '/opt/acme/core',
       '/x/y',
     ]);
   });
+  it('resolves a $NAME root from the server variables', () => {
+    const v = vars(LES, { ACME_HOME: '/opt/acme/core/' });
+    expect(resolveRoots(['$LESDIR', '$ACME_HOME'], v, 'posix')).toEqual(['/opt/acme/cust', '/opt/acme/core']);
+    const sel = pick(entries, ['$ACME_HOME'], v, 'posix');
+    expect(sel.map((e) => e.selected)).toEqual([false, false, false, true, true]);
+  });
+  it.each([
+    ['unset', V],
+    ['relative', vars(LES, { ACME_HOME: 'acme/core' })],
+    ['a list', vars(LES, { ACME_HOME: '/opt/acme/core:/opt/acme/cust' })],
+    ['empty', vars(LES, { ACME_HOME: '' })],
+  ])('rejects a $NAME root that is %s', (_, v) => {
+    expect(() => resolveRoots(['$ACME_HOME'], v, 'posix')).toThrow(
+      'java.roots: "$ACME_HOME" is not set to an absolute folder on the server',
+    );
+  });
   it('selects only the custom layer by default', () => {
-    const sel = pick(entries, ['$LESDIR'], LES, 'posix');
+    const sel = pick(entries, ['$LESDIR'], V, 'posix');
     expect(sel.map((e) => [e.component, e.selected])).toEqual([
       ['cust', true],
       ['cust', true],
@@ -45,30 +63,30 @@ describe('roots and selection', () => {
       ['core', false],
       ['core', false],
     ]);
-    expect(pick(entries, ['$LESDIR', 'core'], LES, 'posix').every((e) => e.selected)).toBe(true);
+    expect(pick(entries, ['$LESDIR', 'core'], V, 'posix').every((e) => e.selected)).toBe(true);
   });
   it('rejects a root that matches nothing', () => {
-    expect(() => pick(entries, ['nope'], LES, 'posix')).toThrow(
+    expect(() => pick(entries, ['nope'], V, 'posix')).toThrow(
       'java.roots: "nope" matches no classpath entry; use $LESDIR, the name of a folder next to it, or an absolute path',
     );
   });
   it.each(['', '  ', '.', '..', 'a/b', 'a\\b'])('rejects the root %j', (root) => {
-    expect(() => pick(entries, [root], LES, 'posix')).toThrow(
+    expect(() => pick(entries, [root], V, 'posix')).toThrow(
       `java.roots: "${root}" is not $LESDIR, a $NAME server variable, the name of a folder next to $LESDIR, or an absolute path`,
     );
   });
   it('builds slugs', () => {
-    const sel = pick(entries, ['$LESDIR', 'core'], LES, 'posix');
+    const sel = pick(entries, ['$LESDIR', 'core'], V, 'posix');
     expect(sel.map((e) => e.slug)).toEqual(['lib', 'javalib', 'build-classes', 'lib', 'lib-single']);
   });
   it('numbers colliding slugs in index order', () => {
     const e = parseClasspath('/opt/acme/cust/lib/*:/opt/acme/cust/lib:/opt/acme/cust/lib/', ':');
-    expect(pick(e, ['$LESDIR'], LES, 'posix').map((x) => x.slug)).toEqual(['lib', 'lib-2', 'lib-3']);
+    expect(pick(e, ['$LESDIR'], V, 'posix').map((x) => x.slug)).toEqual(['lib', 'lib-2', 'lib-3']);
   });
 });
 
 describe('fileSlug', () => {
-  const sel = pick(parseClasspath(CP, ':'), ['$LESDIR', 'core'], LES, 'posix');
+  const sel = pick(parseClasspath(CP, ':'), ['$LESDIR', 'core'], V, 'posix');
   it('names JARs and classes folders', () => {
     expect(fileSlug(sel[0], '/opt/acme/cust/lib/acme-cust.jar', 'posix')).toBe('lib-acme-cust');
     expect(fileSlug(sel[2], '/opt/acme/cust/build/classes/com/acme/W.class', 'posix')).toBe('build-classes');
@@ -89,12 +107,12 @@ describe('windows', () => {
       ['C:\\acme\\cust\\lib', 'dir-wildcard'],
       ['C:\\acme\\cust\\build\\classes', 'dir'],
     ]);
-    const sel = pick(entries, ['c:\\ACME\\Cust'], les, 'windows');
+    const sel = pick(entries, ['c:\\ACME\\Cust'], vars(les), 'windows');
     expect(sel.map((e) => [e.component, e.selected, e.slug])).toEqual([
       ['cust', true, 'lib'],
       ['cust', true, 'build-classes'],
     ]);
-    expect(resolveRoots(['$LESDIR', 'core'], les, 'windows')).toEqual(['C:\\acme\\cust', 'C:\\acme\\core']);
+    expect(resolveRoots(['$LESDIR', 'core'], vars(les), 'windows')).toEqual(['C:\\acme\\cust', 'C:\\acme\\core']);
     expect(fileSlug(sel[0], 'C:\\acme\\cust\\lib\\x-1.0.jar', 'windows')).toBe('lib-x-1.0');
   });
 });
@@ -109,7 +127,7 @@ describe('relative entries', () => {
       ['lib', false],
       ['/opt/acme/cust/lib', true],
     ]);
-    const r = selectEntries(entries, ['$LESDIR'], LES, 'posix');
+    const r = selectEntries(entries, ['$LESDIR'], V, 'posix');
     expect(r.entries.map((e) => e.selected)).toEqual([false, false, false, false, true]);
     expect(r.entries[4].slug).toBe('lib');
     expect(r.warnings).toEqual([
@@ -132,7 +150,7 @@ describe('root wildcards', () => {
 describe('entries outside the parent of lesDir', () => {
   const entries = parseClasspath('/x/y/lib/*:/x/y/lib:/opt/acme/cust/lib/*', ':');
   it('use the external component and a whole-path slug', () => {
-    const sel = pick(entries, ['$LESDIR'], LES, 'posix');
+    const sel = pick(entries, ['$LESDIR'], V, 'posix');
     expect(sel.map((e) => [e.component, e.slug, e.selected])).toEqual([
       ['external', 'x-y-lib', false],
       ['external', 'x-y-lib-2', false],
@@ -142,7 +160,7 @@ describe('entries outside the parent of lesDir', () => {
   });
   it('drops the drive colon on windows', () => {
     const e = parseClasspath('D:\\tools\\lib\\*', ';');
-    const sel = pick(e, ['D:\\tools'], 'C:\\acme\\cust', 'windows');
+    const sel = pick(e, ['D:\\tools'], vars('C:\\acme\\cust'), 'windows');
     expect(sel[0]).toMatchObject({ component: 'external', slug: 'D-tools-lib', selected: true });
   });
 });

@@ -263,6 +263,26 @@ describe('readJavaServer (posix)', () => {
     expect(read.zipListings.size).toBe(0);
   });
 
+  it('reads a $NAME root from the server, once per name', async () => {
+    const fake = fakeOs(posix({ env: { LESDIR: '/opt/acme/cust', CLASSPATH: POSIX_CP, ACME_HOME: '/opt/acme/base' } }));
+    const read = await readJavaServer(fake.exec, { ...defaults, roots: ['$ACME_HOME', '$ACME_HOME'] });
+    expect(pathsOf(read)).toEqual(['/opt/acme/base/lib/lib.jar', '/opt/acme/base/core.jar']);
+    expect(fake.commands.filter((c) => c === 'printenv ACME_HOME')).toHaveLength(1);
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['relative', 'acme/base'],
+    ['a list', '/opt/acme/base:/opt/acme/cust'],
+  ])('rejects a $NAME root that is %s on the server', async (_, value) => {
+    const env: Record<string, string> = { LESDIR: '/opt/acme/cust', CLASSPATH: POSIX_CP };
+    if (value !== undefined) env.ACME_HOME = value;
+    await expect(readJavaServer(fakeOs(posix({ env })).exec, { ...defaults, roots: ['$LESDIR', '$ACME_HOME'] })).rejects.toThrow(
+      'java.roots: "$ACME_HOME" is not set to an absolute folder on the server',
+    );
+  });
+
   it('throws when LESDIR or CLASSPATH is empty', async () => {
     await expect(
       readJavaServer(fakeOs(posix({ env: { CLASSPATH: POSIX_CP } })).exec, defaults),
@@ -392,6 +412,15 @@ describe('readJavaServer (windows)', () => {
     expect(fake.commands.filter((c) => c.includes('Seek('))).toHaveLength(3);
     expect(fake.commands.filter((c) => c.includes('==MOCAKIT-FILE'))).toHaveLength(1);
     expect(Buffer.from(read.files.find((f) => f.path.endsWith('big.jar'))!.bytes!).equals(Buffer.from(big))).toBe(true);
+  });
+
+  it('reads a $NAME root, and rejects one that is unset', async () => {
+    const env = { LESDIR: 'C:\\acme\\cust', CLASSPATH: WIN_CP, ACME_HOME: 'C:\\acme\\base' };
+    const read = await readJavaServer(fakeOs(win({ env })).exec, { ...defaults, roots: ['$ACME_HOME'] });
+    expect(pathsOf(read)).toEqual(['C:\\acme\\base\\lib\\lib.jar', 'C:\\acme\\base\\core.jar']);
+    await expect(readJavaServer(fakeOs(win()).exec, { ...defaults, roots: ['$ACME_HOME'] })).rejects.toThrow(
+      'java.roots: "$ACME_HOME" is not set to an absolute folder on the server',
+    );
   });
 
   it('treats an unset variable as empty and reports a missing jar', async () => {

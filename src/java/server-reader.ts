@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { MocaClient } from '../client/client.js';
 import { quoteMocaString } from '../client/render.js';
 import { MocaCommandError } from '../errors.js';
-import { parseClasspath, selectEntries, type ClasspathEntry } from './classpath.js';
+import { checkRoot, isFolderValue, parseClasspath, selectEntries, VARIABLE_ROOT, type ClasspathEntry } from './classpath.js';
 import {
   DETECT_POSIX,
   DETECT_WINDOWS,
@@ -89,7 +89,8 @@ async function detectFamily(exec: OsExec): Promise<OsFamily> {
   }
 }
 
-async function readVar(exec: OsExec, family: OsFamily, cmds: OsCommands, name: string): Promise<string> {
+/** Value of a server environment variable; '' when it is unset or empty. */
+async function readVarValue(exec: OsExec, family: OsFamily, cmds: OsCommands, name: string): Promise<string> {
   let text = '';
   try {
     text = await exec(cmds.readVar(name));
@@ -97,9 +98,34 @@ async function readVar(exec: OsExec, family: OsFamily, cmds: OsCommands, name: s
     // printenv exits 1 for an unset variable; any other failure is a real error.
     if (!(error instanceof MocaCommandError) || error.status !== 1) throw error;
   }
-  const value = parseVarOutput(family, name, text);
+  return parseVarOutput(family, name, text);
+}
+
+async function readVar(exec: OsExec, family: OsFamily, cmds: OsCommands, name: string): Promise<string> {
+  const value = await readVarValue(exec, family, cmds, name);
   if (value === '') throw new Error(`Java introspection: ${name} is empty on the server`);
   return value;
+}
+
+/** `LESDIR` plus every `$NAME` root, each read once; a `$NAME` must hold one absolute, usable folder. */
+async function readRootVariables(
+  exec: OsExec,
+  family: OsFamily,
+  cmds: OsCommands,
+  lesDir: string,
+  roots: string[],
+): Promise<Map<string, string>> {
+  const variables = new Map([['LESDIR', lesDir]]);
+  for (const root of roots) {
+    checkRoot(root, family);
+    if (!VARIABLE_ROOT.test(root) || variables.has(root.slice(1))) continue;
+    const value = await readVarValue(exec, family, cmds, root.slice(1));
+    if (!isFolderValue(value, family) || !isUsablePath(family, value)) {
+      throw new Error(`java.roots: "${root}" is not set to an absolute folder on the server`);
+    }
+    variables.set(root.slice(1), value);
+  }
+  return variables;
 }
 
 /** Split items into chunks of at most `maxCount` whose command stays short and that `accept` allows (a single item always fits). */
@@ -138,7 +164,8 @@ export async function readJavaServer(exec: OsExec, options: ReadJavaServerOption
   const lesDir = await readVar(exec, family, cmds, 'LESDIR');
   const classpath = await readVar(exec, family, cmds, 'CLASSPATH');
 
-  const selection = selectEntries(parseClasspath(classpath, cmds.classpathSeparator), options.roots, lesDir, family);
+  const variables = await readRootVariables(exec, family, cmds, lesDir, options.roots);
+  const selection = selectEntries(parseClasspath(classpath, cmds.classpathSeparator), options.roots, variables, family);
   const entries = selection.entries;
   warnings.push(...selection.warnings);
 

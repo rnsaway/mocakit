@@ -87,12 +87,33 @@ export function checkRoot(root: string, family?: OsFamily): void {
   );
 }
 
-/** Turn configured roots into absolute folders: `$LESDIR`, a sibling name, or an absolute path. */
-export function resolveRoots(roots: string[], lesDir: string, family: OsFamily): string[] {
+/** Server environment variables by name (without `$`); `LESDIR` is always present. */
+export type RootVariables = ReadonlyMap<string, string>;
+
+/** True when `value` can stand for a `$NAME` root: one absolute path, not a list. */
+export function isFolderValue(value: string, family: OsFamily): boolean {
+  return value !== '' && !value.includes(family === 'windows' ? ';' : ':') && pathApi(family).isAbsolute(value);
+}
+
+function lesDirOf(variables: RootVariables): string {
+  const lesDir = variables.get('LESDIR');
+  if (lesDir === undefined) throw new Error('Java introspection: LESDIR is empty on the server');
+  return lesDir;
+}
+
+/** Turn configured roots into absolute folders: `$LESDIR`, a `$NAME` variable, a sibling name, or an absolute path. */
+export function resolveRoots(roots: string[], variables: RootVariables, family: OsFamily): string[] {
   const api = pathApi(family);
-  const les = normalize(lesDir, family);
+  const les = normalize(lesDirOf(variables), family);
   return roots.map((root) => {
     if (root === '$LESDIR') return les;
+    if (VARIABLE_ROOT.test(root)) {
+      const value = variables.get(root.slice(1));
+      if (value === undefined || !isFolderValue(value, family)) {
+        throw new Error(`java.roots: "${root}" is not set to an absolute folder on the server`);
+      }
+      return normalize(value, family);
+    }
     if (api.isAbsolute(root)) return normalize(root, family);
     return normalize(api.join(api.dirname(les), root), family);
   });
@@ -135,12 +156,13 @@ function baseSlug(entry: ParsedEntry, componentPath: string, family: OsFamily): 
 export function selectEntries(
   entries: ParsedEntry[],
   roots: string[],
-  lesDir: string,
+  variables: RootVariables,
   family: OsFamily,
 ): { entries: ClasspathEntry[]; warnings: string[] } {
   const warnings: string[] = [];
   for (const root of roots) checkRoot(root, family);
-  const resolved = resolveRoots(roots, lesDir, family);
+  const lesDir = lesDirOf(variables);
+  const resolved = resolveRoots(roots, variables, family);
   const used = new Map<string, Set<string>>();
   const out: ClasspathEntry[] = entries.map((e) => {
     if (!e.usable) {

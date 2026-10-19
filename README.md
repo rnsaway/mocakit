@@ -708,7 +708,8 @@ The classpath is the source of truth: mocakit reads the server's `CLASSPATH` and
 A classpath entry is downloaded when it is under one of the `roots`. Each root is one of:
 
 - `$LESDIR` (the default), the folder in the server's `LESDIR` variable;
-- the name of a folder next to it: `cust` means the `cust` folder beside `$LESDIR`;
+- `$NAME`, a server environment variable that holds a folder (it must be set to one absolute path on the server);
+- the name of a folder next to `$LESDIR`: `cust` means the `cust` folder beside `$LESDIR`;
 - an absolute path, such as `/opt/acme/cust`.
 
 ```ts
