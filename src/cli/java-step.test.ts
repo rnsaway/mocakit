@@ -248,9 +248,37 @@ describe('per-JAR classification', { timeout: 30_000 }, () => {
       '/opt/acme/cust/lib/acme-a.jar': buildZip({ 'com/acme/cust/A.class': 'a' }),
     });
     const output = await buildJavaOutput(read, null, settingsFor(dir, { decompiler: DECOMPILER }), ctx(dir));
+    expect(output.warnings).toEqual([]);
     expect(srcFolders(output.sources)).toEqual(['src/cust/lib-acme-a', 'src/cust/lib-x', 'src/cust/lib-x-2']);
     expect(output.manifest.src).toEqual([...new Set(output.manifest.src)]);
     expect(output.manifest.src).toHaveLength(3);
+  });
+});
+
+describe('overridden classes', () => {
+  const A = buildZip({ 'com/acme/cust/A.class': 'a', 'com/acme/cust/A$In.class': 'i' });
+  it('does not count one file reached through a wildcard and an explicit entry', async () => {
+    const dir = await tempDir();
+    const read = await serverRead('/opt/acme/cust/lib/*:/opt/acme/cust/lib/a.jar', { '/opt/acme/cust/lib/a.jar': A });
+    const output = await buildJavaOutput(read, null, settingsFor(dir), ctx(dir));
+    expect(output.manifest.entries).toHaveLength(2);
+    expect(output.manifest.overridden).toEqual([]);
+  });
+  it('does not count one folder spelled two ways', async () => {
+    const dir = await tempDir();
+    const read = await serverRead('/opt/acme/cust/lib/*:/opt/acme//cust/./lib/*', { '/opt/acme/cust/lib/a.jar': A });
+    const output = await buildJavaOutput(read, null, settingsFor(dir), ctx(dir));
+    expect(output.manifest.entries).toHaveLength(1);
+    expect(output.manifest.overridden).toEqual([]);
+  });
+  it('lists outer classes only', async () => {
+    const dir = await tempDir();
+    const read = await serverRead('/opt/acme/cust/lib/*:/opt/acme/cust/ext/*', {
+      '/opt/acme/cust/lib/a.jar': A,
+      '/opt/acme/cust/ext/a-copy.jar': A,
+    });
+    const output = await buildJavaOutput(read, null, settingsFor(dir), ctx(dir));
+    expect(output.manifest.overridden).toEqual([{ className: 'com.acme.cust.A', winner: '/opt/acme/cust/lib', losers: ['/opt/acme/cust/ext'] }]);
   });
 });
 

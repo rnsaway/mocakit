@@ -145,21 +145,29 @@ export function classifyEntry(
   return facts.some((f) => f.classes.some((c) => commandClasses.has(c))) ? 'custom' : 'library';
 }
 
-/** Classes provided by several entries: the first entry in classpath order wins. `classes: null` is skipped. */
+/**
+ * Outer classes provided by several entries: the first entry in classpath order wins. Each item is
+ * one provider in classpath order: an entry (`path`), optionally one canonical file in it, and its
+ * classes (`null` is skipped). One file reached through several entries provides a class once, and
+ * inner classes (`Outer$Inner`) count as their outer class.
+ */
 export function overriddenClasses(
-  entries: Array<{ path: string; classes: string[] | null }>,
+  providers: Array<{ path: string; file?: string; classes: string[] | null }>,
 ): JavaManifest['overridden'] {
-  const providers = new Map<string, string[]>();
-  for (const entry of entries) {
-    if (entry.classes === null) continue;
-    for (const className of new Set(entry.classes)) {
-      const list = providers.get(className);
-      if (list) list.push(entry.path);
-      else providers.set(className, [entry.path]);
+  /** Class name to its providers, keyed by file (or entry, when the file is unknown) in first-seen order. */
+  const byClass = new Map<string, Map<string, string>>();
+  for (const provider of providers) {
+    if (provider.classes === null) continue;
+    const key = provider.file !== undefined ? `file\n${provider.file}` : `entry\n${provider.path}`;
+    for (const className of new Set(provider.classes.map((c) => c.split('$')[0]!))) {
+      const seen = byClass.get(className) ?? new Map<string, string>();
+      byClass.set(className, seen);
+      if (!seen.has(key)) seen.set(key, provider.path);
     }
   }
   const out: JavaManifest['overridden'] = [];
-  for (const [className, paths] of providers) {
+  for (const [className, seen] of byClass) {
+    const paths = [...new Set(seen.values())];
     if (paths.length < 2) continue;
     const [winner, ...losers] = paths as [string, ...string[]];
     out.push({ className, winner, losers });

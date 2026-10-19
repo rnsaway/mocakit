@@ -29,6 +29,23 @@ describe('parseClasspath', () => {
   });
 });
 
+describe('parseClasspath normalization', () => {
+  it('collapses repeated separators and . segments before dropping duplicates, keeping ..', () => {
+    const e = parseClasspath('/opt/acme//cust/lib/*:/opt/acme/cust/./lib/*:/opt/acme/cust/lib/*:/opt/acme/x/../cust/lib/a.jar', ':');
+    expect(e.map((x) => [x.raw, x.path, x.type])).toEqual([
+      ['/opt/acme//cust/lib/*', '/opt/acme/cust/lib', 'dir-wildcard'],
+      ['/opt/acme/x/../cust/lib/a.jar', '/opt/acme/x/../cust/lib/a.jar', 'jar'],
+    ]);
+  });
+  it('normalizes windows paths with either separator', () => {
+    const e = parseClasspath('C:\\acme\\\\cust\\.\\lib\\a.jar;C:\\acme\\cust\\lib\\a.jar;C:/acme/cust/lib/', ';');
+    expect(e.map((x) => [x.path, x.type])).toEqual([
+      ['C:\\acme\\cust\\lib\\a.jar', 'jar'],
+      ['C:\\acme\\cust\\lib', 'dir'],
+    ]);
+  });
+});
+
 describe('roots and selection', () => {
   const entries = parseClasspath(CP, ':');
   it('resolves roots', () => {
@@ -80,7 +97,7 @@ describe('roots and selection', () => {
     expect(sel.map((e) => e.slug)).toEqual(['lib', 'javalib', 'build-classes', 'lib', 'lib-single']);
   });
   it('numbers colliding slugs in index order', () => {
-    const e = parseClasspath('/opt/acme/cust/lib/*:/opt/acme/cust/lib:/opt/acme/cust/lib/', ':');
+    const e = parseClasspath('/opt/acme/cust/lib/*:/opt/acme/cust/lib:/opt/acme/cust/lib.jar', ':');
     expect(pick(e, ['$LESDIR'], V, 'posix').map((x) => x.slug)).toEqual(['lib', 'lib-2', 'lib-3']);
   });
 });

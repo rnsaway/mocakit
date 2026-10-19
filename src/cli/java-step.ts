@@ -229,6 +229,8 @@ interface Item {
   fileBytes: Array<Uint8Array | null>;
   /** All classes the entry provides, or null when unknown. */
   classes: string[] | null;
+  /** Server paths and classes of the JARs of an entry outside the roots, from unzip listings. */
+  listed?: Array<{ path: string; classes: string[] }>;
 }
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -322,17 +324,20 @@ function itemsFromServer(
 
     let names = files.map((f) => f.path);
     let classes: string[] | null;
+    let listed: Item['listed'];
     if (e.selected) {
       classes = unionOf(fileClasses);
     } else if (e.type === 'jar') {
       const listing = read.zipListings.get(e.path);
       classes = listing === undefined ? null : zipClassNames(listing);
+      if (classes !== null) listed = [{ path: e.path, classes }];
       names = [e.path];
       facts.push({ classes: classes ?? [], readable: true });
     } else if (e.type === 'dir-wildcard') {
       const jars = [...read.zipListings.keys()].filter((k) => canon(api.dirname(k.replace(/\\/g, api.sep))) === canon(e.path)).sort(compare);
       const lists = jars.map((k) => zipClassNames(read.zipListings.get(k)!));
       classes = jars.length === 0 ? null : [...new Set(lists.flat())];
+      listed = jars.map((path, i) => ({ path, classes: lists[i]! }));
       names = jars;
       for (const list of lists) facts.push({ classes: list, readable: true });
     } else {
@@ -350,7 +355,21 @@ function itemsFromServer(
       fileClasses,
       fileBytes,
       classes,
+      ...(listed !== undefined ? { listed } : {}),
     };
+  });
+}
+
+/** Providers for `overriddenClasses`: one per file with known classes, so a file reached twice counts once. */
+function classProviders(items: Item[], family: OsFamily): Array<{ path: string; file?: string; classes: string[] | null }> {
+  const canon = (p: string): string => (family === 'windows' ? p.toLowerCase().replace(/\\/g, '/') : p);
+  return items.flatMap((item) => {
+    const path = item.record.path;
+    if (item.listed !== undefined) return item.listed.map((l) => ({ path, file: canon(l.path), classes: l.classes }));
+    if (item.record.files.length > 0) {
+      return item.record.files.map((f, i) => ({ path, file: canon(f.path), classes: item.fileClasses[i] ?? null }));
+    }
+    return [{ path, classes: item.classes }];
   });
 }
 
@@ -495,7 +514,7 @@ export async function buildJavaOutput(
   const entries = items.map((i) => i.record);
 
   const overridden =
-    read !== null ? overriddenClasses(items.map((i) => ({ path: i.record.path, classes: i.classes }))) : previous!.overridden;
+    read !== null ? overriddenClasses(classProviders(items, family)) : previous!.overridden;
 
   // Which entry provides each class: the first in classpath order. Under --from-snapshot the classes of
   // unselected entries are unknown, so the providers recorded on the last live run come first.

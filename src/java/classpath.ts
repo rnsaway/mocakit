@@ -37,25 +37,42 @@ function normalize(p: string, family: OsFamily): string {
   return trimTrailingSeparators(pathApi(family).normalize(p), family);
 }
 
-/** Split a CLASSPATH value into typed entries (empty items and repeated raw values dropped). */
+/**
+ * Collapse repeated separators and `.` segments, and drop trailing separators (windows also turns
+ * `/` into `\`). `..` is kept: it is the server's to resolve, not the local OS's.
+ */
+function tidyPath(p: string, family: OsFamily): string {
+  const api = pathApi(family);
+  const slashed = family === 'windows' ? p.replace(/\//g, '\\') : p;
+  const root = api.parse(slashed).root;
+  const parts = slashed
+    .slice(root.length)
+    .split(family === 'windows' ? /\\+/ : /\/+/)
+    .filter((s) => s !== '' && s !== '.');
+  const tidy = root + parts.join(family === 'windows' ? '\\' : '/');
+  return tidy === '' ? p : tidy;
+}
+
+/** Split a CLASSPATH value into typed entries (empty items, and entries repeating an earlier one once tidied, dropped). */
 export function parseClasspath(value: string, separator: ':' | ';'): ParsedEntry[] {
   const family: OsFamily = separator === ';' ? 'windows' : 'posix';
   const seen = new Set<string>();
   const out: ParsedEntry[] = [];
   for (const piece of value.split(separator)) {
     const raw = piece.trim();
-    if (raw === '' || seen.has(raw)) continue;
-    seen.add(raw);
-    let path = raw;
+    if (raw === '') continue;
+    let path: string;
     let type: EntryType;
     if (/[\\/]\*$/.test(raw)) {
       type = 'dir-wildcard';
-      path = trimTrailingSeparators(raw.slice(0, -1), family);
-    } else if (raw.toLowerCase().endsWith('.jar')) {
-      type = 'jar';
+      path = tidyPath(raw.slice(0, -1), family);
     } else {
-      type = 'dir';
+      type = raw.toLowerCase().endsWith('.jar') ? 'jar' : 'dir';
+      path = tidyPath(raw, family);
     }
+    const key = `${type}\n${family === 'windows' ? path.toLowerCase() : path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push({ index: out.length, raw, path, type, usable: pathApi(family).isAbsolute(path) });
   }
   return out;
