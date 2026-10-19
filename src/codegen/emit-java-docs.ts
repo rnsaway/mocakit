@@ -27,7 +27,8 @@ const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
 /** Inline code that survives any backticks in `text`: the fence is longer than the longest run inside. */
 export function codeSpan(text: string): string {
   const flat = oneLine(text);
-  const longest = Math.max(0, ...(flat.match(/`+/g) ?? []).map((run) => run.length));
+  let longest = 0;
+  for (const run of flat.match(/`+/g) ?? []) if (run.length > longest) longest = run.length;
   const ticks = '`'.repeat(longest + 1);
   const pad = flat.startsWith('`') || flat.endsWith('`') ? ' ' : '';
   return `${ticks}${pad}${flat}${pad}${ticks}`;

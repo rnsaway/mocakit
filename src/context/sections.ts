@@ -14,6 +14,11 @@ export interface Section {
 }
 
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** `target.push(...items)` without the argument-count limit. */
+function pushAll<T>(target: T[], items: T[]): void {
+  for (const item of items) target.push(item);
+}
 const bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
 
 const MAX_DOC_SLUG = 80;
@@ -87,25 +92,39 @@ function scan(lines: string[]): Scan {
   let fence: { ch: string; len: number } | null = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
+    // Manual scanning: no backtracking, and `.`-style regex gaps (U+2028/U+2029) cannot hide a heading.
+    let p = 0;
+    while (p < 3 && line[p] === ' ') p++;
+    const first = line[p];
     if (fence) {
       inFence[i] = true;
-      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
-      if (close && close[1]![0] === fence.ch && close[1]!.length >= fence.len) fence = null;
+      if (first === fence.ch) {
+        let q = p;
+        while (line[q] === first) q++;
+        if (q - p >= fence.len && line.slice(q).trim() === '') fence = null;
+      }
       continue;
     }
-    const open = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (open && !(open[1]![0] === '`' && open[2]!.includes('`'))) {
-      fence = { ch: open[1]![0]!, len: open[1]!.length };
-      inFence[i] = true;
-      continue;
+    if (first === '`' || first === '~') {
+      let q = p;
+      while (line[q] === first) q++;
+      if (q - p >= 3 && !(first === '`' && line.includes('`', q))) {
+        fence = { ch: first, len: q - p };
+        inFence[i] = true;
+        continue;
+      }
     }
-    const atx = /^ {0,3}(#{1,6})[ \t]+(.*)$/.exec(line);
-    if (atx) {
-      let text = atx[2]!.trimEnd();
-      let end = text.length;
-      while (end > 0 && text[end - 1] === '#') end--;
-      if (end < text.length && (end === 0 || text[end - 1] === ' ' || text[end - 1] === '\t')) text = text.slice(0, end).trimEnd();
-      headings.push({ line: i, level: atx[1]!.length, text: text.trim() });
+    if (first === '#') {
+      let q = p;
+      while (line[q] === '#') q++;
+      const level = q - p;
+      if (level <= 6 && (line[q] === ' ' || line[q] === '\t')) {
+        let text = line.slice(q).trim();
+        let end = text.length;
+        while (end > 0 && text[end - 1] === '#') end--;
+        if (end < text.length && (end === 0 || text[end - 1] === ' ' || text[end - 1] === '\t')) text = text.slice(0, end).trimEnd();
+        headings.push({ line: i, level, text: text.trim() });
+      }
     }
   }
   return { headings, inFence };
@@ -168,18 +187,17 @@ function refine(piece: Piece, max: number): Piece[] {
   const inner = headings.filter((h) => h.line > 0 && h.level > piece.level);
   if (inner.length === 0) return partSplit(piece, max);
 
-  const childLevel = Math.min(...inner.map((h) => h.level));
+  let childLevel = 7;
+  for (const h of inner) if (h.level < childLevel) childLevel = h.level;
   const starts = inner.filter((h) => h.level === childLevel);
   const result: Piece[] = [];
   const lead = piece.lines.slice(0, starts[0]!.line);
-  if (joined(lead.slice(1)) !== '') result.push(...refine({ ...piece, lines: lead }, max));
+  if (joined(lead.slice(1)) !== '') pushAll(result, refine({ ...piece, lines: lead }, max));
   starts.forEach((start, k) => {
     const end = k + 1 < starts.length ? starts[k + 1]!.line : piece.lines.length;
-    result.push(
-      ...refine(
-        { heading: start.text, level: childLevel, lines: piece.lines.slice(start.line, end), base: sectionBase(start.text), part: 1, intro: false },
-        max,
-      ),
+    pushAll(
+      result,
+      refine({ heading: start.text, level: childLevel, lines: piece.lines.slice(start.line, end), base: sectionBase(start.text), part: 1, intro: false }, max),
     );
   });
   return result;
@@ -328,8 +346,9 @@ export function splitSections(
     pieces = [];
     const introLines = lines.slice(introStart, starts[0]!.line);
     if (joined(introLines) !== '') {
-      pieces.push(
-        ...refine(
+      pushAll(
+        pieces,
+        refine(
           { heading: 'Introduction', level: splitLevel, lines: [`${'#'.repeat(splitLevel)} Introduction`, '', ...introLines], base: 'introduction', part: 1, intro: true },
           max,
         ),
@@ -337,8 +356,9 @@ export function splitSections(
     }
     starts.forEach((start, k) => {
       const end = k + 1 < starts.length ? starts[k + 1]!.line : lines.length;
-      pieces.push(
-        ...refine({ heading: start.text, level: splitLevel, lines: lines.slice(start.line, end), base: sectionBase(start.text), part: 1, intro: false }, max),
+      pushAll(
+        pieces,
+        refine({ heading: start.text, level: splitLevel, lines: lines.slice(start.line, end), base: sectionBase(start.text), part: 1, intro: false }, max),
       );
     });
   }

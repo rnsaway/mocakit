@@ -101,15 +101,29 @@ class MdWriter {
   }
 }
 
-/** Pipe table from already-escaped cell text; the first row is the header. */
-function renderTable(rows: string[][]): string {
-  const width = rows.reduce((max, row) => Math.max(max, row.length), 0);
-  if (width === 0) return '';
+const MAX_TABLE_COLUMNS = 64;
+const MAX_TABLE_CELLS = 100_000;
+
+/**
+ * Pipe table from already-escaped cell text; the first row is the header. Shows at most 64 columns and 100,000
+ * cells, with a note for what was left out. `naturalWidth` is the widest row before rows were cut to 64 cells and
+ * `moreRows` counts rows the caller already left out.
+ */
+function renderTable(rows: string[][], naturalWidth = 0, moreRows = 0): string {
+  let natural = naturalWidth;
+  for (const row of rows) if (row.length > natural) natural = row.length;
+  if (natural === 0) return '';
+  const width = Math.min(natural, MAX_TABLE_COLUMNS);
+  const shown = Math.min(rows.length, Math.max(1, Math.floor(MAX_TABLE_CELLS / width)));
   const cell = (text: string | undefined): string => collapse(text ?? '').split('|').join('\\|');
   const line = (row: string[]): string => `| ${Array.from({ length: width }, (_, i) => cell(row[i])).join(' | ')} |`;
   const out = [line(rows[0]!), `|${'---|'.repeat(width)}`];
-  for (let i = 1; i < rows.length; i++) out.push(line(rows[i]!));
-  return out.join('\n');
+  for (let i = 1; i < shown; i++) out.push(line(rows[i]!));
+  const parts = [out.join('\n')];
+  if (natural > width) parts.push(`_${natural - width} more columns not shown_`);
+  const hidden = moreRows + rows.length - shown;
+  if (hidden > 0) parts.push(`_${hidden} more rows not shown_`);
+  return parts.join('\n\n');
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -137,27 +151,90 @@ function hrefOf(attrs: string): string | null {
   return m ? (m[1] ?? m[2] ?? m[3] ?? '') : null;
 }
 
-interface Mark {
-  tag: string;
-  start: number;
-  epoch: number;
+// Private-use characters stand in for emphasis and link markers while a block is collected; they are
+// resolved (whitespace moved outside, empty spans dropped, unclosed spans closed) in one pass by renderInline.
+const OPEN_STRONG = '';
+const OPEN_EM = '';
+const OPEN_LINK = '';
+const CLOSE_MARK = '';
+const MARKERS = /[-]/g;
+
+interface OpenSpan {
+  kind: string;
+  href: string;
+  emitted: boolean;
+}
+
+/** Join the chunks of one block, resolving the marker characters. Linear in the size of the chunks. */
+function renderInline(chunks: string[], hrefs: string[]): string {
+  const joinedText = chunks.join('');
+  const out: string[] = [];
+  const stack: OpenSpan[] = [];
+  let firstPending = 0;
+  let pendingSpace = '';
+  let nextHref = 0;
+  const closer = (span: OpenSpan): string => (span.kind === OPEN_STRONG ? '**' : span.kind === OPEN_EM ? '*' : `](${span.href})`);
+  const opener = (span: OpenSpan): string => (span.kind === OPEN_STRONG ? '**' : span.kind === OPEN_EM ? '*' : '[');
+
+  const content = (segment: string): void => {
+    const trimmedStart = segment.trimStart();
+    if (trimmedStart === '') {
+      pendingSpace += segment;
+      return;
+    }
+    const core = trimmedStart.trimEnd();
+    pendingSpace += segment.slice(0, segment.length - trimmedStart.length);
+    out.push(pendingSpace);
+    for (let i = firstPending; i < stack.length; i++) {
+      stack[i]!.emitted = true;
+      out.push(opener(stack[i]!));
+    }
+    firstPending = stack.length;
+    out.push(core);
+    pendingSpace = trimmedStart.slice(core.length);
+  };
+
+  let last = 0;
+  MARKERS.lastIndex = 0;
+  for (let m = MARKERS.exec(joinedText); m !== null; m = MARKERS.exec(joinedText)) {
+    if (m.index > last) content(joinedText.slice(last, m.index));
+    last = m.index + 1;
+    if (m[0] === CLOSE_MARK) {
+      const span = stack.pop();
+      if (span) {
+        if (span.emitted) out.push(closer(span));
+        firstPending = Math.min(firstPending, stack.length);
+      }
+    } else {
+      stack.push({ kind: m[0], href: m[0] === OPEN_LINK ? (hrefs[nextHref++] ?? '') : '', emitted: false });
+    }
+  }
+  if (last < joinedText.length) content(joinedText.slice(last));
+  while (stack.length > 0) {
+    const span = stack.pop()!;
+    if (span.emitted) out.push(closer(span));
+  }
+  out.push(pendingSpace);
+  return out.join('');
 }
 
 class HtmlConverter {
   private readonly out = new MdWriter();
-  private inline = '';
-  private epoch = 0;
+  private chunks: string[] = [];
+  private hrefs: string[] = [];
+  /** Open inline tags of the current block: only a close tag that matches the top is honoured. */
+  private spans: { tag: string; marker: boolean }[] = [];
   private inHead = false;
   private inPre = false;
   private pre = '';
   private codeBuf: string | null = null;
   private heading = 0;
   private readonly lists: { ordered: boolean; count: number; prefix: string | null; used: boolean }[] = [];
-  private readonly anchors: (Mark & { href: string | null })[] = [];
-  private readonly emphasis: Mark[] = [];
   private tableDepth = 0;
   private rows: string[][] = [];
   private row: string[] | null = null;
+  private cellCount = 0;
+  private widest = 0;
   private cellOpen = false;
 
   convert(html: string): string {
@@ -242,25 +319,28 @@ class HtmlConverter {
 
   private text(raw: string): void {
     if (this.inHead) return;
-    const text = decodeEntities(raw);
+    const text = decodeEntities(raw).replace(MARKERS, '');
     if (this.inPre) this.pre += text.split(' ').join(' ');
     else if (this.codeBuf !== null) this.codeBuf += text;
-    else this.inline += escapeText(text.replace(/\s+/g, ' '));
+    else this.chunks.push(escapeText(text.replace(/\s+/g, ' ')));
   }
 
-  private resetInline(): void {
-    this.inline = '';
-    this.epoch++;
+  /** The collected inline text of the current block, with markers resolved; resets the block. */
+  private takeInline(): string {
+    const text = renderInline(this.chunks, this.hrefs);
+    this.chunks = [];
+    this.hrefs = [];
+    this.spans = [];
+    return text;
   }
 
   /** Emit the pending inline text as a paragraph or list line (inside a table cell it becomes a space). */
   private flush(): void {
     if (this.cellOpen) {
-      this.inline += ' ';
+      this.chunks.push(' ');
       return;
     }
-    const text = escapeLeading(collapse(this.inline));
-    this.resetInline();
+    const text = escapeLeading(collapse(this.takeInline()));
     if (text === '') return;
     const list = this.lists[this.lists.length - 1];
     if (list && list.prefix !== null) {
@@ -272,9 +352,8 @@ class HtmlConverter {
   private closeHeading(): void {
     const level = this.heading;
     this.heading = 0;
-    const text = collapse(this.inline);
-    this.resetInline();
-    if (this.cellOpen) this.inline = `${text} `;
+    const text = collapse(this.takeInline());
+    if (this.cellOpen) this.chunks.push(`${text} `);
     else if (text !== '') this.out.block(`${'#'.repeat(level)} ${text}`);
   }
 
@@ -283,17 +362,16 @@ class HtmlConverter {
     else this.flush();
   }
 
-  private wrap(stack: Mark[], tag: string, wrapper: (text: string) => string): void {
-    const top = stack[stack.length - 1];
+  private openSpan(tag: string, marker: string | null): void {
+    this.spans.push({ tag, marker: marker !== null });
+    if (marker !== null) this.chunks.push(marker);
+  }
+
+  private closeSpan(tag: string): void {
+    const top = this.spans[this.spans.length - 1];
     if (!top || top.tag !== tag) return;
-    stack.pop();
-    const start = top.epoch === this.epoch ? Math.min(top.start, this.inline.length) : 0;
-    const segment = this.inline.slice(start);
-    const core = segment.trim();
-    if (core === '') return;
-    const lead = segment.slice(0, segment.length - segment.trimStart().length);
-    const trail = segment.slice(segment.trimEnd().length);
-    this.inline = this.inline.slice(0, start) + lead + wrapper(core) + trail;
+    this.spans.pop();
+    if (top.marker) this.chunks.push(CLOSE_MARK);
   }
 
   private open(name: string, attrs: string): void {
@@ -336,14 +414,20 @@ class HtmlConverter {
       case 'code':
         this.codeBuf = '';
         return;
-      case 'a':
-        this.anchors.push({ tag: 'a', start: this.inline.length, epoch: this.epoch, href: safeHref(hrefOf(attrs)) });
+      case 'a': {
+        const href = safeHref(hrefOf(attrs));
+        if (href !== null) this.hrefs.push(href);
+        this.openSpan('a', href !== null ? OPEN_LINK : null);
         return;
-      case 'b': case 'strong': case 'i': case 'em':
-        this.emphasis.push({ tag: name, start: this.inline.length, epoch: this.epoch });
+      }
+      case 'b': case 'strong':
+        this.openSpan(name, OPEN_STRONG);
+        return;
+      case 'i': case 'em':
+        this.openSpan(name, OPEN_EM);
         return;
       case 'br':
-        this.inline += ' ';
+        this.chunks.push(' ');
         return;
       case 'table':
         if (this.tableDepth === 0) {
@@ -351,22 +435,22 @@ class HtmlConverter {
           this.rows = [];
           this.row = null;
           this.cellOpen = false;
-        } else this.inline += ' ';
+        } else this.chunks.push(' ');
         this.tableDepth++;
         return;
       case 'tr':
         if (this.tableDepth === 1) {
           this.endRow();
           this.row = [];
-        } else this.inline += ' ';
+        } else this.chunks.push(' ');
         return;
       case 'td': case 'th':
         if (this.tableDepth === 1) {
           this.endCell();
           if (!this.row) this.row = [];
           this.cellOpen = true;
-          this.resetInline();
-        } else this.inline += ' ';
+          this.takeInline();
+        } else this.chunks.push(' ');
         return;
       default:
         if (name === 'p' || BLOCK_TAGS.has(name)) this.breakBlock();
@@ -383,11 +467,7 @@ class HtmlConverter {
       return;
     }
     if (this.codeBuf !== null) {
-      if (name === 'code') {
-        const code = this.codeBuf;
-        this.codeBuf = null;
-        if (code.trim() !== '') this.inline += codeSpan(code);
-      }
+      if (name === 'code') this.endCode();
       return;
     }
     switch (name) {
@@ -405,57 +485,61 @@ class HtmlConverter {
         if (list) list.prefix = null;
         return;
       }
-      case 'a': {
-        const anchor = this.anchors.pop();
-        if (!anchor?.href) return;
-        const href = anchor.href;
-        this.wrap([{ tag: 'a', start: anchor.start, epoch: anchor.epoch }], 'a', (text) => `[${text}](${href})`);
+      case 'a':
+        this.closeSpan('a');
         return;
-      }
-      case 'b': case 'strong':
-        this.wrap(this.emphasis, name, (text) => `**${text}**`);
-        return;
-      case 'i': case 'em':
-        this.wrap(this.emphasis, name, (text) => `*${text}*`);
+      case 'b': case 'strong': case 'i': case 'em':
+        this.closeSpan(name);
         return;
       case 'table':
         if (this.tableDepth === 0) return;
         this.tableDepth--;
         if (this.tableDepth === 0) this.endTable();
-        else this.inline += ' ';
+        else this.chunks.push(' ');
         return;
       case 'tr':
         if (this.tableDepth === 1) this.endRow();
-        else this.inline += ' ';
+        else this.chunks.push(' ');
         return;
       case 'td': case 'th':
         if (this.tableDepth === 1) this.endCell();
-        else this.inline += ' ';
+        else this.chunks.push(' ');
         return;
       default:
         if (name === 'p' || BLOCK_TAGS.has(name)) this.breakBlock();
     }
   }
 
+  private endCode(): void {
+    const code = this.codeBuf ?? '';
+    this.codeBuf = null;
+    if (code.trim() !== '') this.chunks.push(codeSpan(code));
+  }
+
   private endCell(): void {
     if (!this.cellOpen) return;
     this.cellOpen = false;
-    this.row?.push(collapse(this.inline));
-    this.resetInline();
+    const text = collapse(this.takeInline());
+    this.cellCount++;
+    if (this.row && this.row.length < MAX_TABLE_COLUMNS) this.row.push(text);
   }
 
   private endRow(): void {
     this.endCell();
     if (this.row && this.row.length > 0) this.rows.push(this.row);
+    if (this.cellCount > this.widest) this.widest = this.cellCount;
+    this.cellCount = 0;
     this.row = null;
   }
 
   private endTable(): void {
     this.endRow();
     const rows = this.rows;
+    const widest = this.widest;
     this.rows = [];
-    this.resetInline();
-    const table = renderTable(rows);
+    this.widest = 0;
+    this.takeInline();
+    const table = renderTable(rows, widest);
     if (table !== '') this.out.block(table);
   }
 
@@ -465,21 +549,18 @@ class HtmlConverter {
     this.pre = '';
     if (body.trim() === '') return;
     if (this.cellOpen) {
-      this.inline += `${codeSpan(body)} `;
+      this.chunks.push(`${codeSpan(body)} `);
       return;
     }
-    const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
+    let longest = 0;
+    for (const run of body.match(/`+/g) ?? []) if (run.length > longest) longest = run.length;
     const fence = '`'.repeat(Math.max(3, longest + 1));
     this.out.block(`${fence}\n${body}\n${fence}`);
   }
 
   private finish(): void {
     if (this.inPre) this.endPre();
-    if (this.codeBuf !== null) {
-      const code = this.codeBuf;
-      this.codeBuf = null;
-      if (code.trim() !== '') this.inline += codeSpan(code);
-    }
+    if (this.codeBuf !== null) this.endCode();
     if (this.tableDepth > 0) {
       this.tableDepth = 0;
       this.endTable();
@@ -558,6 +639,8 @@ class DocxConverter {
   private tableDepth = 0;
   private rows: string[][] = [];
   private row: string[] = [];
+  private rowWidth = 0;
+  private widest = 0;
   private cell: string[] = [];
 
   convert(xml: string): string {
@@ -724,17 +807,25 @@ class DocxConverter {
         this.endParagraph();
         return;
       case 'tc':
-        if (this.tableDepth === 1) this.row.push(this.cell.join(' '));
+        if (this.tableDepth === 1) {
+          this.rowWidth++;
+          if (this.row.length < MAX_TABLE_COLUMNS) this.row.push(this.cell.join(' '));
+        }
         return;
       case 'tr':
         if (this.tableDepth === 1 && this.row.length > 0) this.rows.push(this.row);
-        if (this.tableDepth === 1) this.row = [];
+        if (this.tableDepth === 1) {
+          this.widest = Math.max(this.widest, this.rowWidth);
+          this.rowWidth = 0;
+          this.row = [];
+        }
         return;
       case 'tbl':
         if (this.tableDepth === 0) return;
         if (--this.tableDepth === 0) {
-          const table = renderTable(this.rows);
+          const table = renderTable(this.rows, this.widest);
           this.rows = [];
+          this.widest = 0;
           if (table !== '') this.out.block(table);
         }
         return;
@@ -749,7 +840,7 @@ class DocxConverter {
       this.segments.push({ text: this.runText, bold: this.bold, italic: this.italic, literal: false });
       this.runText = '';
     }
-    const text = label === '' ? '[image]' : `[image: ${escapeText(label)}]`;
+    const text = label === '' ? '\\[image\\]' : `\\[image: ${escapeText(label)}\\]`;
     this.segments.push({ text, bold: false, italic: false, literal: true });
   }
 
@@ -835,6 +926,8 @@ function convertCsv(bytes: Uint8Array): ConvertResult {
   if (bytes.length > MAX_CSV_BYTES) return { error: 'the CSV is larger than 10 MiB; it was not parsed' };
   const { rows, extra } = parseCsv(decode(bytes), MAX_CSV_ROWS);
   if (!rows.some((row) => row.some((cell) => cell.trim() !== ''))) return { error: 'the CSV has no content' };
-  const table = renderTable(rows.map((row) => row.map(escapeText)));
-  return { markdown: `${table}\n${extra > 0 ? `\n_${extra} more rows not shown_\n` : ''}` };
+  let widest = 0;
+  for (const row of rows) if (row.length > widest) widest = row.length;
+  const table = renderTable(rows.map((row) => row.slice(0, MAX_TABLE_COLUMNS).map(escapeText)), widest, extra);
+  return { markdown: `${table}\n` };
 }

@@ -174,7 +174,7 @@ describe('docx', () => {
         '|---|---|',
         '| nut | 2 |',
         '',
-        '[image: flow]',
+        '\\[image: flow\\]',
         '',
       ].join('\n'),
     });
@@ -188,7 +188,7 @@ describe('docx', () => {
     const xml = doc(
       para(null, '<w:r><w:drawing><wp:docPr id="1" name="Picture 7"/></w:drawing></w:r>') + para(null, run('x', '<w:b w:val="0"/>')),
     );
-    expect(convertBuiltin('.docx', zip(xml))).toEqual({ markdown: '[image: Picture 7]\n\nx\n' });
+    expect(convertBuiltin('.docx', zip(xml))).toEqual({ markdown: '\\[image: Picture 7\\]\n\nx\n' });
   });
 
   it('returns an error for corrupt bytes, a missing document.xml and an oversize entry', () => {
@@ -211,7 +211,7 @@ describe('docx', () => {
     const xml = doc(
       '<w:p><w:r><mc:AlternateContent><mc:Choice><w:drawing><wp:docPr id="1" name="Box"/><w:txbxContent><w:p><w:r><w:t>inside</w:t></w:r></w:p></w:txbxContent></w:drawing></mc:Choice><mc:Fallback><w:pict><w:p><w:r><w:t>fallback</w:t></w:r></w:p></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>',
     );
-    expect(convertBuiltin('.docx', zip(xml))).toEqual({ markdown: '[image: Box]\n' });
+    expect(convertBuiltin('.docx', zip(xml))).toEqual({ markdown: '\\[image: Box\\]\n' });
   });
 
   it('is linear on deeply nested or unterminated xml', () => {
@@ -259,5 +259,77 @@ describe('csv', () => {
 
   it('accepts an unterminated quote', () => {
     expect(convertBuiltin('.csv', enc('a,b\n"x,y'))).toHaveProperty('markdown');
+  });
+});
+
+describe('review round 1: inline nesting, image marker, table caps', () => {
+  it('does not let misnested inline tags build a live link from source text', () => {
+    const out = md('.html', '<p><a href="https://ok.test/">p[<i>t]<i>(javascript:alert(1))</a>R</i></i></p>');
+    expect(out).not.toContain('](javascript:');
+    expect(out).toContain('p\\[');
+    expect(out).toContain('t\\]');
+  });
+
+  it('drops a misnested close and closes what is still open at the end of the block', () => {
+    expect(md('.html', '<p><b>x<a href="https://ok.test/">y</b>z</a></p>')).toBe('**x[yz](https://ok.test/)**\n');
+    expect(md('.html', '<p><b> a </b></p>')).toBe('**a**\n');
+    expect(md('.html', '<p><b> </b>x</p>')).toBe('x\n');
+  });
+
+  it('wraps 80k closed bold runs and 80k links quickly', () => {
+    for (const html of ['<p>' + '<b>x</b> '.repeat(80_000), '<p>' + '<a href="https://ok.test/">x</a> '.repeat(80_000), '<p>' + '<b>'.repeat(80_000) + 'x' + '</b>'.repeat(80_000)]) {
+      const started = Date.now();
+      expect(convertBuiltin('.html', enc(html))).toHaveProperty('markdown');
+      expect(Date.now() - started).toBeLessThan(2000);
+    }
+  });
+
+  const docxWith = (text: string): Uint8Array =>
+    buildZip({
+      'word/document.xml': `<w:document xmlns:w="w" xmlns:wp="wp"><w:body><w:p><w:r><w:drawing><wp:docPr id="1" name="n" descr="flow"/></w:drawing></w:r><w:r><w:t>${text}</w:t></w:r></w:p></w:body></w:document>`,
+    });
+
+  it('escapes the DOCX image marker so following text cannot make a link or definition', () => {
+    for (const tail of ['(javascript:alert(1))', ': javascript:alert(1)']) {
+      const result = convertBuiltin('.docx', docxWith(tail));
+      if ('error' in result) throw new Error(result.error);
+      expect(result.markdown).toBe(`\\[image: flow\\]${tail}\n`);
+    }
+  });
+
+  it('caps CSV columns and cells', () => {
+    const header = Array.from({ length: 10_000 }, () => 'a').join(',');
+    const rows = [header, ...Array.from({ length: 400 }, () => header)];
+    const started = Date.now();
+    const out = md('.csv', rows.join('\n'));
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(out.length).toBeLessThan(200_000);
+    expect(out).toContain('_9936 more columns not shown_');
+  });
+
+  it('caps HTML table columns and total cells', () => {
+    const wide = '<table>' + ('<tr>' + '<td>x</td>'.repeat(20_000) + '</tr>').repeat(20) + '</table>';
+    const out = md('.html', wide);
+    expect(out.length).toBeLessThan(200_000);
+    expect(out).toContain('_19936 more columns not shown_');
+    const tall = '<table>' + ('<tr>' + '<td>x</td>'.repeat(64) + '</tr>').repeat(3000) + '</table>';
+    const tallOut = md('.html', tall);
+    expect(tallOut.split('\n').length).toBeLessThan(1700);
+    expect(tallOut).toMatch(/_\d+ more rows not shown_/);
+  });
+
+  it('caps DOCX table columns', () => {
+    const cells = Array.from({ length: 3000 }, () => '<w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc>').join('');
+    const xml = `<w:document xmlns:w="w"><w:body><w:tbl>${`<w:tr>${cells}</w:tr>`.repeat(30)}</w:tbl></w:body></w:document>`;
+    const result = convertBuiltin('.docx', buildZip({ 'word/document.xml': xml }));
+    if ('error' in result) throw new Error(result.error);
+    expect(result.markdown.length).toBeLessThan(50_000);
+    expect(result.markdown).toContain('_2936 more columns not shown_');
+  });
+
+  it('handles very many pre blocks and backtick runs without spreading arrays', () => {
+    const out = md('.html', '<pre>' + '`'.repeat(300_000) + '</pre>');
+    expect(out.startsWith('`'.repeat(300_001))).toBe(true);
+    expect(convertBuiltin('.html', enc('<p><code>' + '` '.repeat(300_000) + '</code></p>'))).toHaveProperty('markdown');
   });
 });

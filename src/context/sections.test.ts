@@ -197,3 +197,25 @@ describe('splitSections', () => {
     expect(Date.now() - started).toBeLessThan(5000);
   });
 });
+
+describe('review round 1: spreads and regex backtracking', () => {
+  it('splits a document with 300,000 inner headings without a RangeError', () => {
+    const started = Date.now();
+    const { sections } = splitSections('## a\n\n## b\n' + '### h\nxxxxxxxxxx\n'.repeat(300_000), opts);
+    expect(sections.length).toBeGreaterThan(1000);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it('finishes on a long run of spaces and a long backtick line', () => {
+    const started = Date.now();
+    splitSections('#' + ' '.repeat(40_000) + ' \n\n## A\n\nx\n\n## B\n\ny\n', opts);
+    splitSections('## A\n\n' + '`'.repeat(40_000) + '\n\n## B\n\ny\n', opts);
+    splitSections('## A\n\n' + '`'.repeat(40_000) + ' x\n\n## B\n\ny\n', opts);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('finds headings that contain U+2028 and U+2029', () => {
+    const { sections } = splitSections('# A\u2028x\n\ntext\n\n# B\u2029y\n\nmore\n\n# C\n', opts);
+    expect(sections.map((s) => s.file)).toEqual(['01-a-x.md', '02-b-y.md', '03-c.md']);
+  });
+});
