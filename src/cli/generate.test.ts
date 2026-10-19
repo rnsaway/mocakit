@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -745,6 +745,28 @@ describe('runGenerate with the REST API', () => {
   });
 });
 
+/** A symbolic link, or on Windows without the right to create one, a junction (both lstat as links). */
+async function makeLink(target: string, path: string, type: 'file' | 'dir'): Promise<void> {
+  try {
+    await symlink(target, path, type);
+  } catch (error) {
+    if (process.platform !== 'win32') throw error;
+    await symlink(target, path, 'junction');
+  }
+}
+
+const canLink = await (async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mocakit-link-'));
+  try {
+    await makeLink(join(dir, 'missing'), join(dir, 'link'), 'file');
+    return (await lstat(join(dir, 'link'))).isSymbolicLink();
+  } catch {
+    return false;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+})();
+
 const FAKE_DECOMPILER = fileURLToPath(new URL('../../test/fixtures/fake-decompiler.mjs', import.meta.url));
 const JAVA_CLASSPATH = '/opt/acme/cust/lib/*:/opt/acme/cust/thirdparty/*:/opt/acme/cust/classes:/opt/acme/moca/lib/*:rel/x.jar';
 
@@ -924,6 +946,62 @@ describe('runGenerate with Java introspection', { timeout: 30_000 }, () => {
     const entry = manifest.entries.find((e: { path: string }) => e.path === '/opt/acme/cust/build/classes');
     expect(entry.files.map((f: { local: string }) => f.local)).toEqual(['classes/cust/build/classes/com/acme/cust/Widget$1.class']);
     expect(await readFile(join(dir, 'src/moca-java/entries/cust/build-classes.md'), 'utf8')).toContain('`Widget$1`');
+  });
+
+  describe('refuses, writing nothing at all, when a Java write target is a link', () => {
+    /** Every non-folder under src/ (links are listed, never followed): only the link the test made may be there. */
+    const onlyLinkLeft = async (dir: string, link: string) => {
+      const found: string[] = [];
+      const walk = async (folder: string, prefix: string): Promise<void> => {
+        for (const entry of await readdir(folder, { withFileTypes: true })) {
+          if (entry.isDirectory()) await walk(join(folder, entry.name), `${prefix}${entry.name}/`);
+          else found.push(`${prefix}${entry.name}`);
+        }
+      };
+      await walk(join(dir, 'src'), 'src/');
+      expect(found).toEqual([link]);
+    };
+
+    it.skipIf(!canLink)('manifest.json', async () => {
+      const dir = await tempDir();
+      const outside = join(await tempDir(), 'outside.json');
+      await writeFile(outside, 'outside');
+      await mkdir(join(dir, 'src/moca-java'), { recursive: true });
+      const link = join(dir, 'src/moca-java/manifest.json');
+      await makeLink(outside, link, 'file');
+      await expect(
+        runGenerate({ schema: false, java: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } }),
+      ).rejects.toThrow(`refusing to write into ${link}: it is not a regular file`);
+      expect(await readFile(outside, 'utf8')).toBe('outside');
+      await onlyLinkLeft(dir, 'src/moca-java/manifest.json');
+    });
+
+    it.skipIf(!canLink)('a JAR whose link points at a missing file', async () => {
+      const dir = await tempDir();
+      const outside = join(await tempDir(), 'created.jar');
+      await mkdir(join(dir, 'src/moca-java/jars/cust/lib'), { recursive: true });
+      const link = join(dir, 'src/moca-java/jars/cust/lib/acme-cust.jar');
+      await makeLink(outside, link, 'file');
+      await expect(
+        runGenerate({ schema: false, java: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } }),
+      ).rejects.toThrow(`refusing to write into ${link}: it is not a regular file`);
+      expect(await exists(outside)).toBe(false);
+      await onlyLinkLeft(dir, 'src/moca-java/jars/cust/lib/acme-cust.jar');
+    });
+
+    it.skipIf(!canLink)('a src/<component> folder', async () => {
+      const dir = await tempDir();
+      const outside = await tempDir();
+      await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify(decompilerConfig));
+      await mkdir(join(dir, 'src/moca-java/src'), { recursive: true });
+      const link = join(dir, 'src/moca-java/src/cust');
+      await makeLink(outside, link, 'dir');
+      await expect(
+        runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } }),
+      ).rejects.toThrow(`refusing to write into ${link}: it is not a folder`);
+      expect(await readdir(outside)).toEqual([]);
+      await onlyLinkLeft(dir, 'src/moca-java/src/cust');
+    });
   });
 
   it('fails, writing nothing, when the decompiler cannot be started', async () => {

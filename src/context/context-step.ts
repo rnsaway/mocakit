@@ -13,6 +13,7 @@ import type { ContextConfig, MocakitConfig } from '../define-config.js';
 import { BUILTIN_EXTENSIONS, convertBuiltin } from './convert-builtin.js';
 import { checkConverters, convertExternal, converterHash, type ConverterConfig } from './convert-external.js';
 import { assignDocSlugs, splitSections, type Section } from './sections.js';
+import { refuseNonFolder, refuseNonRegularFile } from '../util/write-targets.js';
 
 export interface ResolvedContext {
   dir: string;
@@ -555,16 +556,13 @@ export function logContextSummary(prepared: PreparedContext, io: CliIo): void {
 async function confinedDocDirs(dir: string, relatives: string[]): Promise<Array<{ relative: string; full: string; exists: boolean }>> {
   const docsRoot = resolve(dir, 'docs');
   const result: Array<{ relative: string; full: string; exists: boolean }> = [];
-  const rootInfo = await lstat(docsRoot).catch(() => null);
-  if (rootInfo !== null && !rootInfo.isDirectory()) throw new Error(`refusing to write into ${docsRoot}: it is not a folder`);
+  await refuseNonFolder(docsRoot);
   for (const relative of relatives) {
     const parts = relative.split('/');
     if (parts.length !== 2 || parts[0] !== 'docs' || !SLUG.test(parts[1]!)) continue;
     const full = resolve(docsRoot, parts[1]!);
     if (!full.startsWith(docsRoot + sep)) continue;
-    const info = await lstat(full).catch(() => null);
-    if (info !== null && !info.isDirectory()) throw new Error(`refusing to write into ${full}: it is not a folder`);
-    result.push({ relative, full, exists: info !== null });
+    result.push({ relative, full, exists: await refuseNonFolder(full) });
   }
   return result;
 }
@@ -576,9 +574,7 @@ export async function checkContextTargets(prepared: PreparedContext): Promise<vo
   // Every file this run may write or delete must be absent or a regular file: writeFile follows links,
   // and a link to a generated file would pass the marker check below.
   for (const relative of [...output.files.keys(), PENDING_FILE, MANIFEST_FILE]) {
-    const path = join(settings.dir, ...relative.split('/'));
-    const info = await lstat(path).catch(() => null);
-    if (info !== null && !info.isFile()) throw new Error(`refusing to write into ${path}: it is not a regular file`);
+    await refuseNonRegularFile(join(settings.dir, ...relative.split('/')));
   }
   await checkDocsTargets(settings.dir, output.files, 'context.dir');
 }

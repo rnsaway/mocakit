@@ -37,7 +37,7 @@ import {
   resolveCommandDocsSettings,
 } from './command-docs.js';
 import { apiDocsManagedDirs, readApiSnapshotFile, resolveApiSettings } from './api-step.js';
-import { buildJavaOutput, loadPreviousJava, requirePreviousJava, resolveJavaSettings, writeJavaOutput, type JavaOutput } from './java-step.js';
+import { buildJavaOutput, checkJavaTargets, loadPreviousJava, requirePreviousJava, resolveJavaSettings, writeJavaOutput, type JavaOutput } from './java-step.js';
 import { loadConfig, resolveConnection } from './load-config.js';
 import { checkContextTargets, logContextSummary, prepareContext, resolveContextSettings, writeContext, type PreparedContext } from '../context/context-step.js';
 
@@ -424,8 +424,9 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   if (!options.dryRun && api !== null && api.docs !== null && apiOutput?.docs) {
     await checkDocsTargets(api.docs, apiOutput.docs, 'api.docs');
   }
-  if (!options.dryRun && java !== null && javaOutput?.docs) {
-    await checkDocsTargets(java.dir, javaOutput.docs, 'java.dir');
+  if (!options.dryRun && java !== null && javaOutput !== null) {
+    await checkJavaTargets(java, javaOutput, javaPrevious);
+    if (javaOutput.docs) await checkDocsTargets(java.dir, javaOutput.docs, 'java.dir');
   }
   if (!options.dryRun && context !== null) await checkContextTargets(context);
 

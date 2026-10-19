@@ -237,6 +237,17 @@ describe('writeJavaOutput', () => {
     expect(await exists(join(parent, 'outside.jar'))).toBe(true);
   });
 
+  it('checks its targets itself, writing nothing when one is not a regular file', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'manifest.json'), { recursive: true });
+    const output = emptyOutput(manifestWith(['jars/cust/b.jar']));
+    output.binaries.set('jars/cust/b.jar', new Uint8Array([1]));
+    await expect(writeJavaOutput(settingsFor(dir), output, null, false)).rejects.toThrow(
+      `refusing to write into ${join(dir, 'manifest.json')}: it is not a regular file`,
+    );
+    expect(await exists(join(dir, 'jars'))).toBe(false);
+  });
+
   it('writes and deletes nothing in a dry run', async () => {
     const dir = await tempDir();
     await mkdir(join(dir, 'jars/cust'), { recursive: true });

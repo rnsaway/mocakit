@@ -22,6 +22,7 @@ import {
 import type { OsFamily } from '../java/os-commands.js';
 import type { JavaServerRead } from '../java/server-reader.js';
 import { redactUrl } from '../util/url.js';
+import { refuseNonFolder, refuseNonRegularFile } from '../util/write-targets.js';
 
 export interface ResolvedJava {
   dir: string;
@@ -627,6 +628,53 @@ async function entryDirs(dir: string, files: ReadonlyMap<string, string>): Promi
   return [...set].sort(compare);
 }
 
+/** The absolute path of `relative` (`/` separators) when it lies inside `root`, else null. */
+function insideRoot(root: string, relative: string): string | null {
+  const full = resolve(root, ...relative.split('/'));
+  return full.startsWith(root + sep) ? full : null;
+}
+
+/**
+ * Throws, writing nothing, unless every path this run writes or deletes in the moca-java folder is
+ * safe: the folder and every folder below it on the way to a target must be absent or a real folder
+ * (not a link or junction), and every file target must be absent or a regular file. Covers the
+ * binaries, sources, docs, `manifest.json`, the docs folders it cleans, and the stale files it removes.
+ */
+export async function checkJavaTargets(settings: ResolvedJava, output: JavaOutput, previous: JavaManifest | null): Promise<void> {
+  const root = resolve(settings.dir);
+  const folders = new Map<string, boolean>();
+  const folder = async (full: string): Promise<boolean> => {
+    let exists = folders.get(full);
+    if (exists === undefined) {
+      exists = await refuseNonFolder(full);
+      folders.set(full, exists);
+    }
+    return exists;
+  };
+  /** Checks the folders from the root down to the parent of `relative`; returns its absolute path. */
+  const along = async (relative: string): Promise<string> => {
+    const full = insideRoot(root, relative);
+    if (full === null) throw new Error(`Java introspection: refusing to write ${relative} outside ${settings.dir}`);
+    const parts = relative.split('/');
+    let current = root;
+    if (!(await folder(current))) return full;
+    for (const part of parts.slice(0, -1)) {
+      current = join(current, part);
+      if (!(await folder(current))) break;
+    }
+    return full;
+  };
+
+  const targets = [...output.binaries.keys(), ...output.sources.keys(), ...(output.docs?.keys() ?? []), MANIFEST_FILE];
+  for (const relative of targets) await refuseNonRegularFile(await along(relative));
+  if (output.docs !== null) {
+    for (const managed of await entryDirs(settings.dir, output.docs)) await along(`${managed}/_`);
+  }
+  for (const relative of staleFiles(previous, output.manifest)) {
+    if (insideRoot(root, relative) !== null) await along(relative);
+  }
+}
+
 async function sameContent(path: string, content: Uint8Array): Promise<boolean> {
   try {
     return Buffer.from(await readFile(path)).equals(Buffer.from(content.buffer, content.byteOffset, content.byteLength));
@@ -647,11 +695,7 @@ export async function writeJavaOutput(
   dryRun: boolean,
 ): Promise<{ removed: number }> {
   const root = resolve(settings.dir);
-  /** The absolute path of `relative` when it lies inside the folder, else null. */
-  const inside = (relative: string): string | null => {
-    const full = resolve(root, ...relative.split('/'));
-    return full.startsWith(root + sep) ? full : null;
-  };
+  const inside = (relative: string): string | null => insideRoot(root, relative);
   const stale: string[] = [];
   for (const relative of staleFiles(previous, output.manifest)) {
     const full = inside(relative);
@@ -660,6 +704,8 @@ export async function writeJavaOutput(
     if (info?.isFile()) stale.push(full);
   }
   if (dryRun) return { removed: stale.length };
+  // generate.ts runs this check before any project write; repeat it here as a guard for other callers.
+  await checkJavaTargets(settings, output, previous);
 
   const put = async (relative: string, content: Uint8Array): Promise<void> => {
     const full = inside(relative);
