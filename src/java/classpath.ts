@@ -68,6 +68,25 @@ function isUnder(path: string, root: string, family: OsFamily): boolean {
   return rel === '' || (!rel.startsWith('..') && !api.isAbsolute(rel));
 }
 
+/** A root naming a server environment variable (`$LESDIR` is one). */
+export const VARIABLE_ROOT = /^\$[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Throws unless `root` is `$LESDIR`, a `$NAME` server variable, an absolute path, or a single folder
+ * name (not empty or blank, not `.` or `..`, no `/` or `\`). Without a family, a path absolute on
+ * either family is accepted (the server's family is not known at config time).
+ */
+export function checkRoot(root: string, family?: OsFamily): void {
+  if (VARIABLE_ROOT.test(root)) return;
+  const absolute = family !== undefined ? pathApi(family).isAbsolute(root) : posix.isAbsolute(root) || win32.isAbsolute(root);
+  if (absolute) return;
+  const name = root.trim();
+  if (name !== '' && name !== '.' && name !== '..' && !/[\\/]/.test(root)) return;
+  throw new Error(
+    `java.roots: "${root}" is not $LESDIR, a $NAME server variable, the name of a folder next to $LESDIR, or an absolute path`,
+  );
+}
+
 /** Turn configured roots into absolute folders: `$LESDIR`, a sibling name, or an absolute path. */
 export function resolveRoots(roots: string[], lesDir: string, family: OsFamily): string[] {
   const api = pathApi(family);
@@ -120,6 +139,7 @@ export function selectEntries(
   family: OsFamily,
 ): { entries: ClasspathEntry[]; warnings: string[] } {
   const warnings: string[] = [];
+  for (const root of roots) checkRoot(root, family);
   const resolved = resolveRoots(roots, lesDir, family);
   const used = new Map<string, Set<string>>();
   const out: ClasspathEntry[] = entries.map((e) => {

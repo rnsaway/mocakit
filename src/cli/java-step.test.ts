@@ -96,6 +96,16 @@ describe('resolveJavaSettings', () => {
   ])('rejects %j', (config, message) => {
     expect(() => resolveJavaSettings(config as never, undefined, '/p', out)).toThrow(message);
   });
+
+  it.each(['', '  ', '.', '..', 'a/b', 'a\\b'])('rejects the root %j', (root) => {
+    expect(() => resolveJavaSettings({ java: { roots: ['$LESDIR', root] } }, undefined, '/p', out)).toThrow(
+      `java.roots: "${root}" is not $LESDIR, a $NAME server variable, the name of a folder next to $LESDIR, or an absolute path`,
+    );
+  });
+
+  it.each(['$LESDIR', '$ACME_HOME', 'cust', '/opt/acme/x', 'C:\\acme\\x'])('accepts the root %j', (root) => {
+    expect(resolveJavaSettings({ java: { roots: [root] } }, undefined, '/p', out)?.roots).toEqual([root]);
+  });
 });
 
 const LES = '/opt/acme/cust';

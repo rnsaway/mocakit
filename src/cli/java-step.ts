@@ -4,7 +4,7 @@ import { writeDocs } from '../codegen/docs-writer.js';
 import { emitJavaDocs } from '../codegen/emit-java-docs.js';
 import type { CommandInfo } from '../codegen/introspect-agent.js';
 import type { JavaConfig, MocakitConfig } from '../define-config.js';
-import { fileSlug, type ClasspathEntry } from '../java/classpath.js';
+import { checkRoot, fileSlug, type ClasspathEntry } from '../java/classpath.js';
 import { checkDecompiler, decompile, decompilerHash, inputHash, needsDecompile, type DecompilerConfig } from '../java/decompile.js';
 import { classifyEntry, classNameOf, jarFacts, linkCommands, overriddenClasses, type JarFacts, type JavaLink } from '../java/inventory.js';
 import {
@@ -70,6 +70,7 @@ export function resolveJavaSettings(config: MocakitConfig, flag_: boolean | unde
   const options: Record<string, unknown> = isPlainObject(setting) ? (setting as JavaConfig as Record<string, unknown>) : {};
   const roots = options.roots;
   if (roots !== undefined && !(isStringArray(roots) && roots.length > 0)) throw new Error('java.roots must be a non-empty array of strings');
+  if (roots !== undefined) for (const root of roots) checkRoot(root);
   if (options.dir !== undefined && typeof options.dir !== 'string') throw new Error('java.dir must be a string');
   if (options.maxFileSize !== undefined && !isPositive(options.maxFileSize)) throw new Error('java.maxFileSize must be a positive number of bytes');
   return {

@@ -52,6 +52,11 @@ describe('roots and selection', () => {
       'java.roots: "nope" matches no classpath entry; use $LESDIR, the name of a folder next to it, or an absolute path',
     );
   });
+  it.each(['', '  ', '.', '..', 'a/b', 'a\\b'])('rejects the root %j', (root) => {
+    expect(() => pick(entries, [root], LES, 'posix')).toThrow(
+      `java.roots: "${root}" is not $LESDIR, a $NAME server variable, the name of a folder next to $LESDIR, or an absolute path`,
+    );
+  });
   it('builds slugs', () => {
     const sel = pick(entries, ['$LESDIR', 'core'], LES, 'posix');
     expect(sel.map((e) => e.slug)).toEqual(['lib', 'javalib', 'build-classes', 'lib', 'lib-single']);
