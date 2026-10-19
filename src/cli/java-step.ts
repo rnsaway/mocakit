@@ -6,7 +6,16 @@ import type { CommandInfo } from '../codegen/introspect-agent.js';
 import type { JavaConfig, MocakitConfig } from '../define-config.js';
 import { checkRoot, fileSlug, type ClasspathEntry } from '../java/classpath.js';
 import { checkDecompiler, decompile, decompilerHash, inputHash, needsDecompile, type DecompilerConfig } from '../java/decompile.js';
-import { classifyEntry, classNameOf, jarFacts, linkCommands, overriddenClasses, type JarFacts, type JavaLink } from '../java/inventory.js';
+import {
+  classifyEntry,
+  classNameOf,
+  jarFacts,
+  linkCommands,
+  overriddenClasses,
+  type ClassProvider,
+  type JarFacts,
+  type JavaLink,
+} from '../java/inventory.js';
 import {
   cachedBytes,
   localPathFor,
@@ -131,7 +140,14 @@ function isUsableManifest(m: JavaManifest): boolean {
       isPlainObject(e) &&
       typeof e.path === 'string' &&
       Array.isArray(e.files) &&
-      e.files.every((f) => isPlainObject(f) && typeof f.local === 'string' && typeof f.sha256 === 'string' && typeof f.path === 'string'),
+      e.files.every(
+        (f) =>
+          isPlainObject(f) &&
+          typeof f.local === 'string' &&
+          typeof f.sha256 === 'string' &&
+          typeof f.path === 'string' &&
+          (f.kind === undefined || f.kind === 'custom' || f.kind === 'library'),
+      ),
   );
 }
 
@@ -266,6 +282,7 @@ function itemsFromServer(
   const api = pathApi(read.family);
   const canon = (p: string): string => (read.family === 'windows' ? p.toLowerCase().replace(/\\/g, '/') : p).replace(/\/+$/, '');
   const commandClasses = new Set((ctx.commands ?? []).map((c) => c.active.javaClass).filter((c): c is string => !!c));
+  const globs = { custom: settings.custom, libraries: settings.libraries };
   const missing = new Set(read.missing);
   return read.entries.map((e): Item => {
     const base = { index: e.index, path: e.path, type: e.type, component: e.component, slug: e.slug, selected: e.selected };
@@ -290,7 +307,8 @@ function itemsFromServer(
       if (isJar(f.path)) {
         const jar = jarFacts(bytes);
         if (jar.warning !== undefined) warnings.push(`${f.path}: ${jar.warning}`);
-        files.push(fileRecord(f.path, local, f.size, f.sha256, jar));
+        // Each JAR is classified on its own; a classes folder below is one unit.
+        files.push({ ...fileRecord(f.path, local, f.size, f.sha256, jar), kind: classifyEntry([f.path], [jar], commandClasses, globs) });
         fileClasses.push(jar.readable ? jar.classes : null);
         facts.push(jar);
       } else {
@@ -324,7 +342,9 @@ function itemsFromServer(
       names = [e.path];
       facts.push({ classes: [], readable: true });
     }
-    const kind = classifyEntry(names, facts, commandClasses, { custom: settings.custom, libraries: settings.libraries });
+    const fileKinds = files.map((f) => f.kind).filter((k) => k !== undefined);
+    const kind =
+      fileKinds.length > 0 ? (fileKinds.includes('custom') ? 'custom' : 'library') : classifyEntry(names, facts, commandClasses, globs);
     return {
       record: { ...base, missing: missing.has(e.index), kind, files },
       fileClasses,
@@ -382,8 +402,8 @@ interface DecompileInput {
 function decompileInputs(item: Item, family: OsFamily, lesDir: string): DecompileInput[] {
   const r = item.record;
   if (!r.selected || r.missing || r.files.length === 0 || r.kind === undefined) return [];
-  const library = r.kind === 'library';
   if (r.type === 'dir') {
+    const library = r.kind === 'library';
     const folder = folderLocal(r, family, lesDir);
     const complete = item.fileBytes.every((b) => b !== null);
     const files = complete ? new Map(r.files.map((f, i) => [f.local.slice(folder.length + 1), item.fileBytes[i]!])) : null;
@@ -408,7 +428,7 @@ function decompileInputs(item: Item, family: OsFamily, lesDir: string): Decompil
       prefix: `src/${r.component}/${fileSlug(asClasspathEntry(r), f.path, family)}`,
       name: f.path,
       files: bytes === null ? null : new Map([[base, bytes]]),
-      library,
+      library: (f.kind ?? r.kind) === 'library',
       fileIndexes: [i],
     };
   });
@@ -479,9 +499,27 @@ export async function buildJavaOutput(
 
   // Which entry provides each class: the first in classpath order. Under --from-snapshot the classes of
   // unselected entries are unknown, so the providers recorded on the last live run come first.
-  const classIndex = new Map<string, string>();
-  if (read === null) for (const c of previous!.commands ?? []) if (c.entry !== '' && !classIndex.has(c.javaClass)) classIndex.set(c.javaClass, c.entry);
-  for (const item of items) for (const c of item.classes ?? []) if (!classIndex.has(c)) classIndex.set(c, item.record.path);
+  // Within an entry, the providing file is the first (in file order) whose classes are known to hold it.
+  const classIndex = new Map<string, ClassProvider>();
+  const providerIn = (item: Item | undefined, className: string): string | undefined => {
+    if (item === undefined) return undefined;
+    const i = item.fileClasses.findIndex((list) => list?.includes(className));
+    if (i >= 0) return item.record.files[i]!.path;
+    return item.record.files.length === 1 ? item.record.files[0]!.path : undefined;
+  };
+  if (read === null) {
+    for (const c of previous!.commands ?? []) {
+      if (c.entry === '' || classIndex.has(c.javaClass)) continue;
+      const file = providerIn(items.find((i) => i.record.path === c.entry), c.javaClass);
+      classIndex.set(c.javaClass, { entry: c.entry, ...(file !== undefined ? { file } : {}) });
+    }
+  }
+  for (const item of items) {
+    item.record.files.forEach((f, i) => {
+      for (const c of item.fileClasses[i] ?? []) if (!classIndex.has(c)) classIndex.set(c, { entry: item.record.path, file: f.path });
+    });
+    for (const c of item.classes ?? []) if (!classIndex.has(c)) classIndex.set(c, { entry: item.record.path });
+  }
   const commands =
     ctx.commands !== null
       ? ctx.commands
@@ -491,7 +529,7 @@ export async function buildJavaOutput(
             name: c.name,
             javaClass: c.active.javaClass!,
             ...(c.active.cFunction ? { method: c.active.cFunction } : {}),
-            entry: classIndex.get(c.active.javaClass!) ?? '',
+            entry: classIndex.get(c.active.javaClass!)?.entry ?? '',
           }))
           .sort((a, b) => compare(a.key, b.key))
       : previous?.commands;
@@ -500,9 +538,14 @@ export async function buildJavaOutput(
   const sources = new Map<string, string>();
   const src: string[] = [];
   const inputsDone: Record<string, string> = {};
-  let decompiled = 0;
-  let skippedLibraries = 0;
+  // Entries (by classpath index) with at least one input decompiled or skipped as a library.
+  const decompiledEntries = new Set<number>();
+  const skippedEntries = new Set<number>();
   const classPrefix = new Map<string, string>();
+  // One source folder per input, unique across the run: a JAR reached through two entries shares
+  // one folder, and inputs whose slugs collide get `-2`, `-3` in classpath order.
+  const prefixOf = new Map<string, string>();
+  const takenPrefixes = new Set<string>();
   const decompiler = settings.decompiler;
   const previousInputs =
     decompiler !== null && previous?.decompiler !== undefined && decompilerHash(previous.decompiler) === decompilerHash(decompiler)
@@ -510,12 +553,21 @@ export async function buildJavaOutput(
       : undefined;
   let checked = false;
   for (const item of items) {
-    for (const input of decompileInputs(item, family, lesDir)) {
+    for (const found of decompileInputs(item, family, lesDir)) {
+      const repeated = prefixOf.get(found.key);
+      let prefix = repeated ?? found.prefix;
+      if (repeated === undefined) {
+        for (let n = 2; takenPrefixes.has(prefix); n++) prefix = `${found.prefix}-${n}`;
+        takenPrefixes.add(prefix);
+        prefixOf.set(found.key, prefix);
+      }
+      const input = { ...found, prefix };
       for (const i of input.fileIndexes) {
         for (const c of item.fileClasses[i] ?? []) if (!classPrefix.has(c)) classPrefix.set(c, input.prefix);
       }
+      if (repeated !== undefined) continue;
       if (input.library && !settings.decompileLibraries) {
-        skippedLibraries++;
+        skippedEntries.add(item.record.index);
         continue;
       }
       if (decompiler === null) continue;
@@ -548,7 +600,7 @@ export async function buildJavaOutput(
         src.push(path);
       }
       inputsDone[input.key] = input.hash;
-      decompiled++;
+      decompiledEntries.add(item.record.index);
     }
   }
   src.sort(compare);
@@ -606,8 +658,8 @@ export async function buildJavaOutput(
       downloaded: downloadedFiles.length,
       downloadedBytes: downloadedFiles.reduce((sum, f) => sum + f.size, 0),
       unchanged: (read !== null ? read.files.length : allFiles.length) - downloadedFiles.length,
-      decompiled,
-      skippedLibraries,
+      decompiled: decompiledEntries.size,
+      skippedLibraries: skippedEntries.size,
     },
     warnings,
   };

@@ -177,11 +177,20 @@ export interface JavaLink {
   source?: string;
 }
 
-/** Link each command that has a `javaClass` to the classpath entry that provides its class. Keyed by command key. */
+/** The entry path that provides a class and, when known, the server path of the file in it. */
+export interface ClassProvider {
+  entry: string;
+  file?: string;
+}
+
+/**
+ * Link each command that has a `javaClass` to the classpath entry that provides its class. Keyed by
+ * command key. The kind is that of the providing JAR when it has one, else the entry's.
+ */
 export function linkCommands(
   commands: CommandInfo[],
   manifest: JavaManifest,
-  classIndex: ReadonlyMap<string, string>,
+  classIndex: ReadonlyMap<string, ClassProvider>,
   sourceFor: (className: string) => string | undefined,
 ): Map<string, JavaLink> {
   const links = new Map<string, JavaLink>();
@@ -191,9 +200,10 @@ export function linkCommands(
     if (!className) continue;
     const method = def.cFunction || undefined;
     const methodPart = method ? { method } : {};
-    const entryPath = classIndex.get(className);
-    const record = entryPath === undefined ? undefined : manifest.entries.find((e) => e.path === entryPath);
-    if (!record || record.kind === undefined) {
+    const provider = classIndex.get(className);
+    const record = provider === undefined ? undefined : manifest.entries.find((e) => e.path === provider.entry);
+    const kind = record?.files.find((f) => f.path === provider?.file)?.kind ?? record?.kind;
+    if (!record || kind === undefined) {
       links.set(command.key, { className, ...methodPart, entry: '', kind: 'unknown', downloaded: false });
       continue;
     }
@@ -203,7 +213,7 @@ export function linkCommands(
       className,
       ...methodPart,
       entry: record.path,
-      kind: record.kind,
+      kind,
       downloaded,
       ...(source !== undefined ? { source } : {}),
     });

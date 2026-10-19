@@ -55,6 +55,7 @@ describe('emitJavaDocs', () => {
     expect(readme.indexOf(LICENCE_LINE)).toBeGreaterThan(readme.indexOf(PRIVATE_NOTICE));
     expect(readme).toContain('execute os command');
     expect(readme).toContain('jars/');
+    expect(readme).toContain('`mocakit generate --from-snapshot` without them shows "classes unknown"');
     expect(readme).not.toMatch(/windows/i);
     expect(readme).not.toContain('u:p@');
   });

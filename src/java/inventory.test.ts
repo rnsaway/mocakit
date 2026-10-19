@@ -144,8 +144,8 @@ describe('linkCommands', () => {
     overrides: [],
   });
   const index = new Map([
-    ['com.acme.cust.Widgets', '/opt/acme/cust/lib/cust.jar'],
-    ['com.acme.other.Thing', '/opt/acme/other/o.jar'],
+    ['com.acme.cust.Widgets', { entry: '/opt/acme/cust/lib/cust.jar' }],
+    ['com.acme.other.Thing', { entry: '/opt/acme/other/o.jar' }],
   ]);
 
   it('links downloaded, undownloaded and unknown classes; skips non-java commands', () => {
@@ -190,8 +190,8 @@ describe('linkCommands', () => {
       entries: [rec('/opt/acme/cust/nokind.jar', { files: [{ path: 'p', local: 'l', size: 1, sha256: 'h', classes: 1, readable: true }] })],
     } as unknown as JavaManifest;
     const idx = new Map([
-      ['com.acme.cust.Gone', '/opt/acme/cust/gone.jar'],
-      ['com.acme.cust.NoKind', '/opt/acme/cust/nokind.jar'],
+      ['com.acme.cust.Gone', { entry: '/opt/acme/cust/gone.jar' }],
+      ['com.acme.cust.NoKind', { entry: '/opt/acme/cust/nokind.jar' }],
     ]);
     const links = linkCommands(
       [cmd('gone', 'com.acme.cust.Gone', 'a'), cmd('no kind', 'com.acme.cust.NoKind', 'b')],
@@ -213,6 +213,20 @@ describe('linkCommands', () => {
   it('omits method when there is no cFunction', () => {
     const links = linkCommands([cmd('nomethod', 'com.acme.cust.Widgets')], manifest, index, () => undefined);
     expect(links.get('nomethod')).not.toHaveProperty('method');
+  });
+
+  it('takes the kind of the JAR that provides the class', () => {
+    const file = (path: string, kind: 'custom' | 'library') => ({ path, local: path.slice(1), size: 1, sha256: 'h', classes: 1, readable: true, kind });
+    const m = {
+      entries: [rec('/opt/acme/cust/lib', { type: 'dir-wildcard', kind: 'custom', files: [file('/opt/acme/cust/lib/a.jar', 'custom'), file('/opt/acme/cust/lib/b-1.0.jar', 'library')] })],
+    } as unknown as JavaManifest;
+    const idx = new Map([
+      ['com.acme.A', { entry: '/opt/acme/cust/lib', file: '/opt/acme/cust/lib/a.jar' }],
+      ['com.acme.B', { entry: '/opt/acme/cust/lib', file: '/opt/acme/cust/lib/b-1.0.jar' }],
+    ]);
+    const links = linkCommands([cmd('a', 'com.acme.A', 'run'), cmd('b', 'com.acme.B', 'run')], m, idx, () => undefined);
+    expect(links.get('a')).toMatchObject({ kind: 'custom' });
+    expect(links.get('b')).toMatchObject({ kind: 'library' });
   });
 
   it('links any command with a javaClass regardless of type', () => {

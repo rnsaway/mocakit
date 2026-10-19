@@ -722,9 +722,11 @@ changed since the last run aren't downloaded again.
 
 ### Custom code, libraries and commands
 
-- **Custom or library.** An entry is a library when it has Maven coordinates or a versioned file name (such as
-  `widget-lib-2.1.0.jar`), and none of its classes implements a MOCA command. Everything else, including classes
-  folders, is custom. `custom` and `libraries` (file-name globs) override the guess; `libraries` wins when both match.
+- **Custom or library.** Each JAR is classified on its own, also inside a `lib/*` folder. A JAR is a library when it
+  has Maven coordinates or a versioned file name (such as `widget-lib-2.1.0.jar`), and none of its classes implements
+  a MOCA command. Everything else, including classes folders, is custom. `custom` and `libraries` (file-name globs)
+  override the guess for the JARs they match; `libraries` wins when both match. Only custom JARs are decompiled (see
+  `decompileLibraries`), and an entry counts as custom when any of its JARs is.
 - **Overridden classes.** Entries are read in classpath order and the first entry that provides a class wins. Later
   entries with the same class are listed as overridden, in both entries' docs. If the server has `unzip` (Linux and
   Unix), mocakit also lists the classes of entries outside the roots, without downloading them; otherwise their
@@ -750,9 +752,9 @@ java: {
 ```
 
 `{input}` is a JAR file or a classes folder and `{output}` is an empty folder. The command runs on your machine, in a
-temporary folder, without a shell; nothing is decompiled on the server. Custom entries are decompiled by default; set
-`decompileLibraries: true` to include libraries. An entry is decompiled again only when its files or the decompiler
-settings change.
+temporary folder, without a shell; nothing is decompiled on the server. Custom JARs and classes folders are decompiled by
+default; set `decompileLibraries: true` to include libraries. A JAR or classes folder is decompiled again only when its
+files or the decompiler settings change.
 
 If the command can't be started, the run fails with `decompiler command "<command>" could not be started`. A failure
 or timeout on one input is a warning, and that entry has no source. Without a decompiler, mocakit logs
@@ -776,7 +778,9 @@ anything is written, as for the other docs folders.
 
 `--from-snapshot` rebuilds the inventory, the command links and the docs from `moca-java/` without contacting the
 server, and decompiles again if the decompiler settings changed. The custom/library classification is reused from
-the previous `manifest.json`: changes to `java.custom` or `java.libraries` apply on the next live run. If the folder
+the previous `manifest.json`: changes to `java.custom` or `java.libraries` apply on the next live run. The class lists
+come from the local `jars/` and `classes/`, so a snapshot run without them shows "classes unknown". If your team
+rebuilds from snapshots in CI, keep `jars/` and `classes/` available there (still privately, not in git). If the folder
 doesn't exist, the run fails with
 `Java introspection is enabled but <dir> does not exist; run generate against a server first, or pass --no-java`.
 

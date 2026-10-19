@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fakeOs } from '../../test/helpers/fake-os.js';
 import { buildZip } from '../../test/helpers/zip-builder.js';
+import type { CommandInfo } from '../codegen/introspect-agent.js';
 import type { JavaManifest } from '../java/manifest.js';
 import { readJavaServer } from '../java/server-reader.js';
 import { buildJavaOutput, resolveJavaSettings, writeJavaOutput, type ResolvedJava } from './java-step.js';
@@ -167,6 +169,88 @@ describe('buildJavaOutput', () => {
     const pages = [...output.docs!.keys()].filter((k) => k.startsWith('entries/'));
     expect(pages).toEqual(['entries/cust/classes.md']);
     expect(output.docs!.get('entries/cust/classes.md')).toContain('- `com.acme.cust`: `A`, `B`');
+  });
+});
+
+const FAKE_DECOMPILER = fileURLToPath(new URL('../../test/fixtures/fake-decompiler.mjs', import.meta.url));
+const DECOMPILER = { command: process.execPath, args: [FAKE_DECOMPILER, '{input}', '{output}'] };
+const command = (key: string, javaClass: string): CommandInfo => ({ name: key, key, active: { level: 'cust', levelSeq: 1, javaClass, cFunction: 'run' }, overrides: [] });
+
+// These runs spawn the fake decompiler (a node process per input), which is slow on a busy machine.
+describe('per-JAR classification', { timeout: 30_000 }, () => {
+  const CUST = buildZip({ 'com/acme/cust/Widgets.class': 'w' });
+  const LIB = buildZip({ 'com/acme/widget/Lib.class': 'l' });
+  const srcFolders = (sources: Map<string, string>) => [...new Set([...sources.keys()].map((k) => k.split('/').slice(0, 3).join('/')))].sort();
+
+  it('decompiles only the custom JAR of a mixed wildcard folder', async () => {
+    const dir = await tempDir();
+    const read = await serverRead('/opt/acme/cust/lib/*', { '/opt/acme/cust/lib/acme-cust.jar': CUST, '/opt/acme/cust/lib/widget-lib-2.1.0.jar': LIB });
+    const commands = [command('move widget', 'com.acme.cust.Widgets')];
+    const output = await buildJavaOutput(read, null, settingsFor(dir, { decompiler: DECOMPILER }), { ...ctx(dir), commands });
+    const entry = output.manifest.entries[0];
+    expect(entry.kind).toBe('custom');
+    expect(entry.files.map((f) => [f.local, f.kind])).toEqual([
+      ['jars/cust/lib/acme-cust.jar', 'custom'],
+      ['jars/cust/lib/widget-lib-2.1.0.jar', 'library'],
+    ]);
+    expect(srcFolders(output.sources)).toEqual(['src/cust/lib-acme-cust']);
+    expect(output.links.get('move widget')).toMatchObject({ kind: 'custom', entry: '/opt/acme/cust/lib' });
+    expect(output.docs!.get('entries/cust/lib-widget-lib-2.1.0.md')).toContain('- Kind: library');
+    expect(output.docs!.get('entries/cust/lib-acme-cust.md')).toContain('- Kind: custom');
+    expect(output.stats).toMatchObject({ decompiled: 1, skippedLibraries: 1 });
+  });
+
+  it('applies a libraries glob to the matching JAR only, and links its classes as library', async () => {
+    const dir = await tempDir();
+    const read = await serverRead('/opt/acme/cust/lib/*', {
+      '/opt/acme/cust/lib/acme-cust.jar': CUST,
+      '/opt/acme/cust/lib/acme-other.jar': LIB,
+    });
+    const commands = [command('move widget', 'com.acme.cust.Widgets'), command('lib call', 'com.acme.widget.Lib')];
+    const settings = settingsFor(dir, { decompiler: DECOMPILER, libraries: ['acme-other.jar'] });
+    const output = await buildJavaOutput(read, null, settings, { ...ctx(dir), commands });
+    expect(output.manifest.entries[0].files.map((f) => f.kind)).toEqual(['custom', 'library']);
+    expect(output.manifest.entries[0].kind).toBe('custom');
+    expect(srcFolders(output.sources)).toEqual(['src/cust/lib-acme-cust']);
+    expect(output.links.get('move widget')).toMatchObject({ kind: 'custom', entry: '/opt/acme/cust/lib' });
+    expect(output.links.get('lib call')).toMatchObject({ kind: 'library', entry: '/opt/acme/cust/lib' });
+  });
+
+  it('keeps a library-looking JAR custom when one of its classes implements a command, without its siblings', async () => {
+    const dir = await tempDir();
+    const read = await serverRead('/opt/acme/cust/lib/*', {
+      '/opt/acme/cust/lib/widget-cust-1.0.0.jar': CUST,
+      '/opt/acme/cust/lib/widget-lib-2.1.0.jar': LIB,
+    });
+    const commands = [command('move widget', 'com.acme.cust.Widgets')];
+    const output = await buildJavaOutput(read, null, settingsFor(dir, { decompiler: DECOMPILER }), { ...ctx(dir), commands });
+    expect(output.manifest.entries[0].files.map((f) => f.kind)).toEqual(['custom', 'library']);
+    expect(srcFolders(output.sources)).toEqual(['src/cust/lib-widget-cust-1.0.0']);
+  });
+
+  it('counts decompiled entries, not JARs', async () => {
+    const dir = await tempDir();
+    const read = await serverRead('/opt/acme/cust/lib/*', {
+      '/opt/acme/cust/lib/acme-a.jar': CUST,
+      '/opt/acme/cust/lib/acme-b.jar': buildZip({ 'com/acme/cust/B.class': 'b' }),
+      '/opt/acme/cust/lib/acme-c.jar': buildZip({ 'com/acme/cust/C.class': 'c' }),
+    });
+    const output = await buildJavaOutput(read, null, settingsFor(dir, { decompiler: DECOMPILER }), ctx(dir));
+    expect(srcFolders(output.sources)).toEqual(['src/cust/lib-acme-a', 'src/cust/lib-acme-b', 'src/cust/lib-acme-c']);
+    expect(output.stats).toMatchObject({ decompiled: 1, skippedLibraries: 0 });
+  });
+
+  it('gives colliding source folders of one component distinct names, and decompiles a file reached twice once', async () => {
+    const dir = await tempDir();
+    const read = await serverRead('/opt/acme/cust/lib/*:/opt/acme/cust/lib-x.jar:/opt/acme/cust/lib/acme-a.jar', {
+      '/opt/acme/cust/lib/x.jar': CUST,
+      '/opt/acme/cust/lib-x.jar': buildZip({ 'com/acme/cust/Other.class': 'o' }),
+      '/opt/acme/cust/lib/acme-a.jar': buildZip({ 'com/acme/cust/A.class': 'a' }),
+    });
+    const output = await buildJavaOutput(read, null, settingsFor(dir, { decompiler: DECOMPILER }), ctx(dir));
+    expect(srcFolders(output.sources)).toEqual(['src/cust/lib-acme-a', 'src/cust/lib-x', 'src/cust/lib-x-2']);
+    expect(output.manifest.src).toEqual([...new Set(output.manifest.src)]);
+    expect(output.manifest.src).toHaveLength(3);
   });
 });
 

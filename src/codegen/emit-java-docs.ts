@@ -105,6 +105,7 @@ function readme(marker: string): string {
     '`execute os command` runs as the server\'s OS user. mocakit only reads: it lists directories, reads files and computes checksums, and never writes on the server.',
     '',
     'Keep `jars/` and `classes/` out of git: they are large binary files that can be downloaded again by running `mocakit generate`.',
+    'The class lists come from these local copies, so `mocakit generate --from-snapshot` without them shows "classes unknown". If you rebuild from a snapshot elsewhere (for example in CI), keep `jars/` and `classes/` available there, still privately.',
     '',
   ].join('\n');
 }
@@ -169,7 +170,8 @@ export function emitJavaDocs(manifest: JavaManifest, input: JavaDocsInput): Map<
     const { entry, file } = page;
     const lines = [marker, `# ${codeSpan(entry.path)}`, ''];
     lines.push(`- Component: ${codeSpan(entry.component)}`, `- Classpath index: ${entry.index}`, `- Selected: ${entry.selected ? 'yes' : 'no'}`);
-    if (entry.kind !== undefined) lines.push(`- Kind: ${entry.kind}`);
+    const kind = file?.kind ?? entry.kind;
+    if (kind !== undefined) lines.push(`- Kind: ${kind}`);
     if (file !== undefined) {
       lines.push(`- File: ${codeSpan(file.path)}`, `- Local copy: ${codeSpan(file.local)}`);
       if (file.maven !== undefined) lines.push(`- Maven: ${codeSpan(file.maven)}`);

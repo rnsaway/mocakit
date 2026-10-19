@@ -13,6 +13,8 @@ export interface JavaFileRecord {
   version?: string;
   classes: number;
   readable: boolean;
+  /** Per-JAR classification; absent for class files (a classes folder takes its entry's kind). */
+  kind?: 'custom' | 'library';
 }
 
 export interface JavaEntryRecord {
@@ -23,6 +25,7 @@ export interface JavaEntryRecord {
   slug: string;
   selected: boolean;
   missing: boolean;
+  /** `custom` when any of its JARs is custom; a classes folder is classified as one unit. */
   kind?: 'custom' | 'library';
   files: JavaFileRecord[];
 }
