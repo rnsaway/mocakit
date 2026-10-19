@@ -838,6 +838,24 @@ describe('runGenerate with Java introspection', { timeout: 30_000 }, () => {
     expect(out).toContain('No decompiler configured; skipped Java source');
   });
 
+  it.each([
+    ['decompiler: null', (m: Record<string, unknown>) => ({ ...m, decompiler: null })],
+    ['decompiler.command not a string', (m: Record<string, unknown>) => ({ ...m, decompiler: { command: 1 } })],
+    ['decompiler.inputs with a non-string value', (m: Record<string, unknown>) => ({ ...m, decompiler: { command: 'x', args: [], inputs: { a: 1 } } })],
+    ['a malformed commands element', (m: Record<string, unknown>) => ({ ...m, commands: [{ key: 'move widget', name: 7 }] })],
+    ['commands not an array', (m: Record<string, unknown>) => ({ ...m, commands: 'x' })],
+  ])('treats a manifest with %s as no previous manifest (full download, no crash)', async (_name, damage) => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify(decompilerConfig));
+    await runGenerate({ dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } });
+    const file = join(dir, 'src/moca-java/manifest.json');
+    await writeFile(file, JSON.stringify(damage(JSON.parse(await readFile(file, 'utf8')))));
+    const { io: cliIo, out } = io();
+    await runGenerate({ dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: javaServer().transport } });
+    expect(out).toContain('Downloaded 3 files (0.0 MB, 0 unchanged)');
+    expect(out).toContain('Decompiled 2 entries (1 skipped: libraries)');
+  });
+
   it('removes the files of a JAR that left the server', async () => {
     const dir = await tempDir();
     await runGenerate({ java: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } });

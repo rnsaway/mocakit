@@ -88,7 +88,42 @@ export function resolveJavaSettings(config: MocakitConfig, flag_: boolean | unde
 function isUsableManifest(m: JavaManifest): boolean {
   const record = m as unknown as Record<string, unknown>;
   if (!Array.isArray(record.entries) || !isStringArray(record.src) || !Array.isArray(record.overridden)) return false;
-  if (record.commands !== undefined && !Array.isArray(record.commands)) return false;
+  const optionalString = (v: unknown): boolean => v === undefined || typeof v === 'string';
+  const decompiler = record.decompiler;
+  if (
+    decompiler !== undefined &&
+    !(
+      isPlainObject(decompiler) &&
+      typeof decompiler.command === 'string' &&
+      isStringArray(decompiler.args) &&
+      isPlainObject(decompiler.inputs) &&
+      Object.values(decompiler.inputs).every((v) => typeof v === 'string')
+    )
+  ) {
+    return false;
+  }
+  const commands = record.commands;
+  if (
+    commands !== undefined &&
+    !(
+      Array.isArray(commands) &&
+      commands.every(
+        (c: unknown) =>
+          isPlainObject(c) &&
+          typeof c.key === 'string' &&
+          typeof c.name === 'string' &&
+          typeof c.javaClass === 'string' &&
+          typeof c.entry === 'string' &&
+          optionalString(c.method),
+      )
+    )
+  ) {
+    return false;
+  }
+  const overridden: unknown[] = record.overridden;
+  if (!overridden.every((o) => isPlainObject(o) && typeof o.className === 'string' && typeof o.winner === 'string' && isStringArray(o.losers))) {
+    return false;
+  }
   return m.entries.every(
     (e) =>
       isPlainObject(e) &&
