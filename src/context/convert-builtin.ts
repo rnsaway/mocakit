@@ -229,6 +229,7 @@ class HtmlConverter {
   private pre = '';
   private codeBuf: string | null = null;
   private heading = 0;
+  private headingMark = { chunks: 0, hrefs: 0, spans: 0 };
   private readonly lists: { ordered: boolean; count: number; prefix: string | null; used: boolean }[] = [];
   private tableDepth = 0;
   private rows: string[][] = [];
@@ -352,9 +353,19 @@ class HtmlConverter {
   private closeHeading(): void {
     const level = this.heading;
     this.heading = 0;
+    if (this.cellOpen) {
+      // Render only this heading's own chunks, not the whole cell, so many headings stay linear.
+      const mark = this.headingMark;
+      const from = Math.min(mark.chunks, this.chunks.length);
+      const text = collapse(renderInline(this.chunks.slice(from), this.hrefs.slice(Math.min(mark.hrefs, this.hrefs.length))));
+      this.chunks.length = from;
+      this.hrefs.length = Math.min(mark.hrefs, this.hrefs.length);
+      this.spans.length = Math.min(mark.spans, this.spans.length);
+      this.chunks.push(`${text} `);
+      return;
+    }
     const text = collapse(this.takeInline());
-    if (this.cellOpen) this.chunks.push(`${text} `);
-    else if (text !== '') this.out.block(`${'#'.repeat(level)} ${text}`);
+    if (text !== '') this.out.block(`${'#'.repeat(level)} ${text}`);
   }
 
   private breakBlock(): void {
@@ -392,6 +403,7 @@ class HtmlConverter {
       case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':
         this.breakBlock();
         this.heading = Number(name[1]);
+        this.headingMark = { chunks: this.chunks.length, hrefs: this.hrefs.length, spans: this.spans.length };
         return;
       case 'ul': case 'ol':
         this.breakBlock();
@@ -513,7 +525,8 @@ class HtmlConverter {
   private endCode(): void {
     const code = this.codeBuf ?? '';
     this.codeBuf = null;
-    if (code.trim() !== '') this.chunks.push(codeSpan(code));
+    // Padded so neighbouring backticks (text or another span) can never merge with the fence.
+    if (code.trim() !== '') this.chunks.push(` ${codeSpan(code)} `);
   }
 
   private endCell(): void {
@@ -549,7 +562,7 @@ class HtmlConverter {
     this.pre = '';
     if (body.trim() === '') return;
     if (this.cellOpen) {
-      this.chunks.push(`${codeSpan(body)} `);
+      this.chunks.push(` ${codeSpan(body)} `);
       return;
     }
     let longest = 0;

@@ -333,3 +333,85 @@ describe('review round 1: inline nesting, image marker, table caps', () => {
     expect(convertBuiltin('.html', enc('<p><code>' + '` '.repeat(300_000) + '</code></p>'))).toHaveProperty('markdown');
   });
 });
+
+describe('review round 2: adjacent code spans and headings in cells', () => {
+  /** A `]` with an even number of preceding backslashes, followed by `(javascript:`, after an unescaped `[`. */
+  const BS = String.fromCharCode(92);
+  /** Remove code spans (a backtick run closed by a run of the same length); escaped backticks are not fences. */
+  const withoutCodeSpans = (text: string): string => {
+    let out = '';
+    for (let i = 0; i < text.length; ) {
+      if (text[i] === BS) {
+        out += text.slice(i, i + 2);
+        i += 2;
+      } else if (text[i] === '`') {
+        let n = 0;
+        while (text[i + n] === '`') n++;
+        let j = i + n;
+        let close = -1;
+        while (j < text.length && close < 0) {
+          if (text[j] !== '`') {
+            j++;
+            continue;
+          }
+          let m = 0;
+          while (text[j + m] === '`') m++;
+          if (m === n) close = j + m;
+          j += m;
+        }
+        if (close < 0) {
+          out += text.slice(i, i + n);
+          i += n;
+        } else i = close;
+      } else out += text[i++];
+    }
+    return out;
+  };
+  const liveJavascriptLink = (raw: string): boolean => {
+    const out = withoutCodeSpans(raw);
+    for (let i = out.indexOf('](javascript:'); i !== -1; i = out.indexOf('](javascript:', i + 1)) {
+      let slashes = 0;
+      while (out[i - 1 - slashes] === '\\') slashes++;
+      if (slashes % 2 === 1) continue;
+      for (let j = i - 1; j >= 0; j--) {
+        if (out[j] !== '[') continue;
+        let back = 0;
+        while (out[j - 1 - back] === '\\') back++;
+        if (back % 2 === 0) return true;
+      }
+    }
+    return false;
+  };
+
+  it('does not let adjacent code spans merge their backticks into a live link', () => {
+    const payload = '](javascript:alert(1))';
+    const variants = [
+      `<p><a href="https://ok.test/"><code>\`\`</code><code>${payload}</code></a></p>`,
+      `<p><a href="https://ok.test/"><code>\`</code><code>${payload}</code></a></p>`,
+      `<p><a href="https://ok.test/"><code>\`\`</code><b></b><code>${payload}</code></a></p>`,
+      `<p><a href="https://ok.test/"><code>x\`</code><i></i><code>\`${payload}</code></a></p>`,
+      `<p><a href="https://ok.test/">\`<code>${payload}</code></a></p>`,
+      `<p><a href="https://ok.test/"><code>a\`</code>\`<code>${payload}</code></a></p>`,
+      `<table><tr><td><a href="https://ok.test/"><pre>\`\`</pre><code>${payload}</code></a></td></tr></table>`,
+    ];
+    for (const html of variants) {
+      const out = md('.html', html);
+      expect(liveJavascriptLink(out), html + ' => ' + out).toBe(false);
+    }
+  });
+
+  it('keeps ordinary inline code readable', () => {
+    expect(md('.html', '<p>use <code>a</code><code>b</code> and <code>`x`</code>.</p>')).toBe('use `a` `b` and `` `x` `` .\n');
+  });
+
+  it('renders 80k headings inside a table cell quickly', () => {
+    const started = Date.now();
+    const out = md('.html', '<table><tr><td>' + '<b><h1>x</h1>'.repeat(80_000));
+    expect(out.startsWith('| **x **x')).toBe(true);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('keeps heading text and emphasis in a cell correct', () => {
+    expect(md('.html', '<table><tr><td>a<h2>t <b>b</b></h2>c</td></tr></table>')).toBe('| a t **b** c |\n|---|\n');
+  });
+});
