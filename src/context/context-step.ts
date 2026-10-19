@@ -338,10 +338,20 @@ export async function buildContextOutput(settings: ResolvedContext, previous: Co
     const prev = previousBySource.get(source.path);
     const prevSameSlug = prev !== undefined && prev.slug === slug ? prev : undefined;
 
-    const agent = await readAgent(agentDir, slug, warnings);
+    // A read error on one agent file makes only that document pending.
+    let agent: Awaited<ReturnType<typeof readAgent>> = null;
+    let agentError: string | undefined;
+    try {
+      agent = await readAgent(agentDir, slug, warnings);
+    } catch (error) {
+      agentError = `cannot read agent/${slug}.md: ${errorCode(error) ?? message(error)}`;
+      warnings.push(agentError);
+    }
     const converter = settings.converters[ext];
     let plan: Plan;
-    if (agent !== null && agent.sha256 === sha) {
+    if (agentError !== undefined) {
+      plan = { kind: 'pending', reason: agentError };
+    } else if (agent !== null && agent.sha256 === sha) {
       plan = { kind: 'agent', markdown: agent.markdown, agentSha: agent.fileSha };
     } else if (agent !== null) {
       warnings.push(`agent/${slug}.md was written for a different version of sources/${source.path}; reconvert it`);
@@ -563,6 +573,13 @@ async function confinedDocDirs(dir: string, relatives: string[]): Promise<Array<
 export async function checkContextTargets(prepared: PreparedContext): Promise<void> {
   const { settings, output } = prepared;
   await confinedDocDirs(settings.dir, output.managedDirs);
+  // Every file this run may write or delete must be absent or a regular file: writeFile follows links,
+  // and a link to a generated file would pass the marker check below.
+  for (const relative of [...output.files.keys(), PENDING_FILE, MANIFEST_FILE]) {
+    const path = join(settings.dir, ...relative.split('/'));
+    const info = await lstat(path).catch(() => null);
+    if (info !== null && !info.isFile()) throw new Error(`refusing to write into ${path}: it is not a regular file`);
+  }
   await checkDocsTargets(settings.dir, output.files, 'context.dir');
 }
 

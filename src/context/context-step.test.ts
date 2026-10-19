@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, mkdtemp, open, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, open, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -407,5 +407,55 @@ describe('runContext', () => {
     const { out } = await run(settings);
     expect(out[0]).toBe('Converted 4 documents (6 sections, 0 unchanged)');
     expect(await exists(join(settings.dir, 'docs/link'))).toBe(false);
+  });
+
+  it('refuses, writing nothing, when manifest.json is a symbolic link', async () => {
+    const { settings } = await project();
+    const agentFile = join(settings.dir, 'agent/x.md');
+    await mkdir(join(settings.dir, 'agent'), { recursive: true });
+    await writeFile(agentFile, 'agent text\n');
+    try {
+      await symlink(agentFile, join(settings.dir, 'manifest.json'), 'file');
+    } catch {
+      return; // creating symbolic links needs extra rights on this machine
+    }
+    await expect(run(settings)).rejects.toThrow(`refusing to write into ${join(settings.dir, 'manifest.json')}: it is not a regular file`);
+    expect(await readFile(agentFile, 'utf8')).toBe('agent text\n');
+    expect(await exists(join(settings.dir, 'INDEX.md'))).toBe(false);
+    expect(await exists(join(settings.dir, 'docs'))).toBe(false);
+  });
+
+  it.each(['manifest.json', 'INDEX.md', 'PENDING.md', 'docs/guide/README.md', 'docs/guide/01-setup.md'])(
+    'refuses, writing nothing, when %s is a folder',
+    async (target) => {
+      const { settings } = await project();
+      await mkdir(join(settings.dir, target), { recursive: true });
+      await expect(run(settings)).rejects.toThrow(`refusing to write into ${join(settings.dir, target)}: it is not a regular file`);
+      for (const file of ['manifest.json', 'INDEX.md', 'PENDING.md', 'docs/notes', 'docs/table']) {
+        if (file !== target) expect(await exists(join(settings.dir, file))).toBe(false);
+      }
+      expect(await readdir(join(settings.dir, target))).toEqual([]);
+    },
+  );
+
+  it('makes only the document pending when its agent file cannot be read', async () => {
+    const { settings } = await project();
+    const agentFile = join(settings.dir, 'agent/guide.md');
+    await mkdir(join(settings.dir, 'agent'), { recursive: true });
+    await writeFile(agentFile, '# Guide\n');
+    await chmod(agentFile, 0o000);
+    const readable = await readFile(agentFile).then(
+      () => true,
+      () => false,
+    );
+    if (readable) return; // permissions are not enforced here (Windows, or running as root)
+    try {
+      const { out, err } = await run(settings);
+      expect(out[0]).toBe('Converted 3 documents (4 sections, 0 unchanged)');
+      expect(err.some((e) => e.includes('agent/guide.md'))).toBe(true);
+      expect(await readFile(join(settings.dir, 'PENDING.md'), 'utf8')).toMatch(/## guide\n\n[^#]*- Reason: cannot read agent\/guide\.md/);
+    } finally {
+      await chmod(agentFile, 0o644);
+    }
   });
 });
