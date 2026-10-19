@@ -1,3 +1,5 @@
+import type { ConverterConfig } from './context/convert-external.js';
+
 /** Opt-in database schema introspection (tables, views, columns). */
 export interface SchemaConfig {
   /** Table/view name globs (`*`, `?`), case-insensitive. Default `['*']`. */
@@ -87,6 +89,23 @@ export interface JavaConfig {
   decompileLibraries?: boolean;
 }
 
+/**
+ * Opt-in agent context (moca-context/): documents in `sources/` converted to Markdown, split by
+ * section and indexed. Converted locally; nothing is sent to the server.
+ */
+export interface ContextConfig {
+  /** Output folder. Default `moca-context` next to `out`. */
+  dir?: string;
+  /** Folder of documents to convert. Default `<dir>/sources`. */
+  sources?: string;
+  /** Converter commands by lowercase extension with the dot (e.g. `.pdf`); `args` may use `{input}` and `{output}`. */
+  converters?: Record<string, ConverterConfig>;
+  /** Globs (paths relative to `sources`) of documents your coding agent converts; listed in PENDING.md. */
+  agent?: string[];
+  /** Sections larger than this many bytes are split again. Default 61440. */
+  maxSectionBytes?: number;
+}
+
 export interface MocakitConfig {
   /** Falls back to the MOCA_URL environment variable. */
   url?: string;
@@ -116,6 +135,8 @@ export interface MocakitConfig {
   api?: boolean | ApiConfig;
   /** `true` or an object enables Java introspection (moca-java/); see `JavaConfig`. Default off. */
   java?: boolean | JavaConfig;
+  /** `true` or an object enables agent context from documents (moca-context/); see `ContextConfig`. Default off. */
+  context?: boolean | ContextConfig;
 }
 
 export function defineConfig(config: MocakitConfig): MocakitConfig {

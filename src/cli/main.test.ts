@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -315,5 +315,50 @@ describe('runCli .env loading', () => {
     await runCli(['--help'], cliIo);
     expect(out.join('\n')).toContain('[--java | --no-java]');
     expect(out.join('\n')).toContain('--no-java');
+  });
+
+  it('rejects --context together with --no-context', async () => {
+    const { io: cliIo, err } = capture();
+    expect(await runCli(['generate', '--context', '--no-context'], cliIo, await tempDir())).toBe(1);
+    expect(err).toContain('mocakit: --context and --no-context cannot be used together');
+  });
+
+  it('documents the context command and flags', async () => {
+    const { io: cliIo, out } = capture();
+    await runCli(['--help'], cliIo);
+    expect(out.join('\n')).toContain('[--context | --no-context]');
+    expect(out.join('\n')).toContain('Usage: mocakit context [--config <path>] [--dry-run] [--verbose]');
+  });
+
+  it('runs mocakit context without a config file or credentials', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'src/moca-context/sources'), { recursive: true });
+    await writeFile(join(dir, 'src/moca-context/sources/guide.md'), '# Acme Guide\n\n## Setup\n\nInstall it.\n\n## Usage\n\nUse it.\n');
+    const { io: cliIo, out, err } = capture();
+    expect(await runCli(['context'], cliIo, dir)).toBe(0);
+    expect(err).toEqual([]);
+    expect(out).toEqual(['Converted 1 documents (2 sections, 0 unchanged)', `Wrote agent context to ${join(dir, 'src/moca-context')}`]);
+    expect(await readFile(join(dir, 'src/moca-context/docs/guide/01-setup.md'), 'utf8')).toContain('Install it.');
+  });
+
+  it('mocakit context uses the config file when given, and --dry-run writes nothing', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ out: 'gen/moca.ts', context: { dir: 'ctx' } }));
+    const { io: cliIo, out } = capture();
+    expect(await runCli(['context', '--config', 'mocakit.config.json', '--dry-run', '--verbose'], cliIo, dir)).toBe(0);
+    expect(out).toEqual([
+      `Put documents to convert in ${join(dir, 'ctx/sources')}`,
+      'Converted 0 documents (0 sections, 0 unchanged)',
+      `Would write agent context to ${join(dir, 'ctx')}`,
+    ]);
+    expect(await readdir(dir)).toEqual(['mocakit.config.json']);
+  });
+
+  it('mocakit context reports a missing explicit config and rejects unknown flags', async () => {
+    const dir = await tempDir();
+    const { io: cliIo, err } = capture();
+    expect(await runCli(['context', '--config', 'nope.json'], cliIo, dir)).toBe(1);
+    expect(err.at(-1)).toMatch(/^mocakit: Config file not found: /);
+    expect(await runCli(['context', '--out', 'x'], cliIo, dir)).toBe(1);
   });
 });

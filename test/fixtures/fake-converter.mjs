@@ -1,5 +1,5 @@
 // Test double for a document converter. Usage: node fake-converter.mjs <mode> <input> [output]
-// Modes: ok-text | ok-md | fail | empty | hang. With an output path, the text is written there instead of stdout.
+// Modes: ok-text | ok-md | fail | noisy | empty | hang. With an output path, the text is written there instead of stdout.
 import { writeFileSync } from 'node:fs';
 
 const [, , mode = 'ok-text', input, output] = process.argv;
@@ -24,6 +24,9 @@ if (mode === 'ok-text') {
 } else if (mode === 'fail') {
   process.stderr.write('boom: cannot convert\n');
   process.exit(2);
+} else if (mode === 'noisy') {
+  process.stderr.write(`<b>bad</b> [x](y)\t${'z'.repeat(400)}\nsecond line\n`);
+  process.exit(3);
 } else if (mode === 'hang') {
   setTimeout(() => {}, 60_000);
 }

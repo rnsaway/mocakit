@@ -25,6 +25,7 @@ export {
   defineConfig,
   type ApiConfig,
   type CommandDocsConfig,
+  type ContextConfig,
   type DecompilerConfig,
   type JavaConfig,
   type MocakitConfig,

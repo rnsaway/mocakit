@@ -39,6 +39,7 @@ import {
 import { apiDocsManagedDirs, readApiSnapshotFile, resolveApiSettings } from './api-step.js';
 import { buildJavaOutput, loadPreviousJava, requirePreviousJava, resolveJavaSettings, writeJavaOutput, type JavaOutput } from './java-step.js';
 import { loadConfig, resolveConnection } from './load-config.js';
+import { checkContextTargets, logContextSummary, prepareContext, resolveContextSettings, writeContext, type PreparedContext } from '../context/context-step.js';
 
 export interface CliIo {
   log(message: string): void;
@@ -57,6 +58,8 @@ export interface GenerateOptions {
   api?: boolean;
   /** `true` = --java, `false` = --no-java, `undefined` = the config decides. */
   java?: boolean;
+  /** `true` = --context, `false` = --no-context, `undefined` = the config decides. */
+  context?: boolean;
   dryRun: boolean;
   /** Print every warning instead of the first `MAX_PRINTED_WARNINGS` and a count. */
   verbose?: boolean;
@@ -66,7 +69,7 @@ export interface GenerateOptions {
   deps?: MocaClientDeps;
 }
 
-const DEFAULT_OUT = 'src/moca.generated.ts';
+export const DEFAULT_OUT = 'src/moca.generated.ts';
 
 /** How many individual warnings the CLI prints; the rest are summarized in one line. */
 const MAX_PRINTED_WARNINGS = 50;
@@ -170,6 +173,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   const codesSettings = resolveCodesSettings(config, schema !== null);
   const api = resolveApiSettings(config, options.api, configDir, out);
   const java = resolveJavaSettings(config, options.java, configDir, out);
+  const contextSettings = resolveContextSettings(config, options.context, configDir, out);
 
   if (!options.dryRun) {
     // Fail fast, before contacting the server, if an output directory can't be created.
@@ -320,6 +324,14 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     else io.log(`Decompiled ${stats.decompiled} entries (${stats.skippedLibraries} skipped: libraries)`);
   }
 
+  // Agent context from local documents; never touches the server.
+  let context: PreparedContext | null = null;
+  if (contextSettings !== null) {
+    context = await prepareContext(contextSettings, VERSION);
+    warn.print(context.output.warnings);
+    logContextSummary(context, io);
+  }
+
   // Keep the previous usage when this run did not compute it (command docs off), so the table
   // docs' "Used by" sections survive. Code values are never carried over.
   const existingSchema = schema !== null && schemaSnapshot !== null ? await readSchemaSnapshot(schema.snapshot).catch(() => null) : null;
@@ -398,6 +410,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   if (!options.dryRun && java !== null && javaOutput?.docs) {
     await checkDocsTargets(java.dir, javaOutput.docs, 'java.dir');
   }
+  if (!options.dryRun && context !== null) await checkContextTargets(context);
 
   if (options.fromSnapshot === undefined) {
     // Everything was read; only now write. Leave an existing snapshot byte-for-byte alone when
@@ -504,4 +517,6 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     io.log(`${verb} Java inventory to ${java.dir}`);
     if (!options.dryRun && result.removed > 0) io.log(`Removed ${result.removed} stale Java files`);
   }
+
+  if (context !== null) await writeContext(context, io, options.dryRun);
 }
