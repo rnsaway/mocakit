@@ -71,7 +71,7 @@ export interface DecompilerConfig {
  * the selected JARs and classes downloaded and verified, and optionally decompiled.
  */
 export interface JavaConfig {
-  /** Classpath roots to download: `$LESDIR`, a sibling component name (e.g. `cust`) or an absolute path. Default `['$LESDIR']`. */
+  /** Classpath roots to download: `$LESDIR`, the name of a folder next to it, or an absolute path. Default `['$LESDIR']`. */
   roots?: string[];
   /** File-name globs always treated as custom code. */
   custom?: string[];

@@ -94,21 +94,6 @@ function locate(path: string, lesDir: string, family: OsFamily): { name: string;
   return { name: EXTERNAL, dir: '' };
 }
 
-function componentOf(path: string, lesDir: string, family: OsFamily): string {
-  return locate(path, lesDir, family).name;
-}
-
-/** Distinct components in first-seen order. */
-export function componentsOf(entries: Array<{ path: string }>, lesDir: string, family: OsFamily): string[] {
-  const out: string[] = [];
-  for (const e of entries) {
-    if (!pathApi(family).isAbsolute(e.path)) continue;
-    const c = componentOf(e.path, lesDir, family);
-    if (!out.includes(c)) out.push(c);
-  }
-  return out;
-}
-
 /** Slug of the entry's path below its component (separators become `-`). */
 function baseSlug(entry: ParsedEntry, componentPath: string, family: OsFamily): string {
   const api = pathApi(family);
@@ -157,7 +142,7 @@ export function selectEntries(
     const r = resolved[i];
     if (!out.some((e) => e.usable && isUnder(normalize(e.path, family), r, family))) {
       throw new Error(
-        `java.roots: "${root}" matches no classpath entry (components: ${componentsOf(entries, lesDir, family).join(', ')})`,
+        `java.roots: "${root}" matches no classpath entry; use $LESDIR, the name of a folder next to it, or an absolute path`,
       );
     }
   });

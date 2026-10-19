@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { componentsOf, fileSlug, parseClasspath, resolveRoots, selectEntries } from './classpath.js';
+import { fileSlug, parseClasspath, resolveRoots, selectEntries } from './classpath.js';
 
 const pick = (...a: Parameters<typeof selectEntries>) => selectEntries(...a).entries;
 const LES = '/opt/acme/cust';
@@ -25,10 +25,6 @@ describe('parseClasspath', () => {
     ]);
     expect(entries[0].raw).toBe('/opt/acme/cust/lib/*');
   });
-  it('finds components', () => {
-    expect(componentsOf(entries, LES, 'posix')).toEqual(['cust', 'core']);
-    expect(componentsOf([{ path: '/x/y' }], LES, 'posix')).toEqual(['external']);
-  });
 });
 
 describe('roots and selection', () => {
@@ -53,7 +49,7 @@ describe('roots and selection', () => {
   });
   it('rejects a root that matches nothing', () => {
     expect(() => pick(entries, ['nope'], LES, 'posix')).toThrow(
-      'java.roots: "nope" matches no classpath entry (components: cust, core)',
+      'java.roots: "nope" matches no classpath entry; use $LESDIR, the name of a folder next to it, or an absolute path',
     );
   });
   it('builds slugs', () => {
@@ -117,7 +113,6 @@ describe('relative entries', () => {
       'classpath entry "../x" is not an absolute path; skipped',
       'classpath entry "lib/*" is not an absolute path; skipped',
     ]);
-    expect(componentsOf(entries, LES, 'posix')).toEqual(['cust']);
   });
 });
 
@@ -139,7 +134,6 @@ describe('entries outside the parent of lesDir', () => {
       ['cust', 'lib', true],
     ]);
     expect(fileSlug(sel[0], '/x/y/lib/a.jar', 'posix')).toBe('x-y-lib-a');
-    expect(componentsOf(entries, LES, 'posix')).toEqual(['external', 'cust']);
   });
   it('drops the drive colon on windows', () => {
     const e = parseClasspath('D:\\tools\\lib\\*', ';');
