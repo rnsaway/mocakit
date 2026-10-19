@@ -4,6 +4,34 @@ All notable changes to mocakit are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/) (while below 1.0.0, a minor version can contain breaking changes).
 
+## [0.6.0] - 2026-10-19
+
+### Added
+
+- **Java introspection** (`java` in the config, or `--java`): `mocakit generate` reads the server's `CLASSPATH` with
+  `execute os command`, using fixed read-only commands only, and writes `moca-java/`: the classpath inventory in load
+  order (`INDEX.md`, `entries/`, `manifest.json`), the JARs and classes under the configured `roots` (default
+  `['$LESDIR']`), each verified against its sha256 and downloaded again only when it changed, custom/library
+  classification (`custom`, `libraries`), overridden classes, and links from Java command pages in `moca-commands/`
+  to the entry and source that implement them. Options: `roots`, `custom`, `libraries`, `dir`, `docs`, `maxFileSize`,
+  `decompiler`, `decompileLibraries`.
+- **Decompiled source**: with a locally installed decompiler (`java.decompiler`), custom code (and libraries with
+  `decompileLibraries`) is decompiled on your machine, in a temporary folder, into `moca-java/src/`.
+- **Agent context from documents** (`context` in the config, or `--context`): documents in `moca-context/sources/`
+  become Markdown split by section (`maxSectionBytes`, default 61,440) with `INDEX.md` and per-document indexes.
+  Built-in `.md`, `.txt`, `.html`, `.docx` and `.csv`; user converters per extension (`converters`), with a cleanup
+  for plain-text output such as `pdftotext`; and agent conversion through `PENDING.md` and `agent/<document>.md` files
+  that mocakit never writes or deletes.
+- **`mocakit context`** (`--config`, `--dry-run`, `--verbose`): runs the agent-context step alone, with no server,
+  no credentials and no config file required.
+- `--java` / `--no-java` and `--context` / `--no-context` flags. `--from-snapshot` rebuilds `moca-java/` without
+  contacting the server.
+
+### Changed
+
+- mocakit is now described as an agentic development toolkit: the README opens with how a developer generates the
+  files and an AI coding agent builds from them offline, without touching the server.
+
 ## [0.5.0] - 2026-10-01
 
 ### Added
@@ -118,6 +146,7 @@ All notable changes to mocakit are documented here. The format follows
   `MocaArgumentError`) with password redaction, a `MocaOutputs` registry for row types, and date helpers
   (`formatMocaDate`, `parseMocaDate`).
 
+[0.6.0]: https://github.com/rnsaway/mocakit/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rnsaway/mocakit/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rnsaway/mocakit/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rnsaway/mocakit/compare/v0.2.0...v0.3.0

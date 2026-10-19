@@ -1,9 +1,39 @@
 # mocakit
 
-Typed TypeScript SDK for MOCA servers (Blue Yonder / RedPrairie WMS), plus a generator that turns every active
-MOCA command on your instance into a typed function.
+**An agentic development toolkit for MOCA. Your AI coding agent never has to touch the server to build.**
+
+mocakit turns a MOCA instance into everything an AI coding agent needs to build against it. At its core it is a
+typed TypeScript SDK for MOCA servers (Blue Yonder / RedPrairie WMS), plus a generator that turns every active MOCA
+command on your instance into a typed function. Around that, it writes the files an agent reads:
+
+- **a typed client**: one typed method per active MOCA command;
+- **schema types and agent docs** for your tables, views and columns;
+- **command docs**: arguments, source, triggers and an approximate call graph for every command;
+- **a REST API client and docs** from the server's Swagger specs;
+- **a Java inventory and decompiled source** of your custom code (new in 0.6.0);
+- **agent context from your own documents**: guidelines, runbooks and specs, split by section (new in 0.6.0).
 
 > mocakit is an independent open-source project. It is not affiliated with, sponsored or endorsed by Blue Yonder.
+
+## How it works
+
+1. **A developer runs `mocakit generate`** (and `mocakit context`) with their own credentials. Server access is
+   read-only: the introspection commands and, for Java, read-only OS commands. `mocakit context` needs no server at
+   all.
+2. **Everything lands as files in your private repository**: the typed client, snapshots and Markdown docs.
+3. **The AI agent builds from those files, offline.** It never needs credentials, a session or network access to
+   the server.
+
+What mocakit doesn't do: the code your agent writes still talks to the server when it runs, like any MOCA client.
+Running it and testing it against a real (test) environment is still done by people. mocakit gives the agent what
+it needs to write the code; it doesn't replace that testing.
+
+**Contents:** [Requirements](#requirements) · [Install](#install) ·
+[Generate a typed client](#generate-a-typed-client) · [Use it](#use-it) · [Typing outputs](#typing-outputs) ·
+[Schema types](#schema-types-agent-docs--mocafrom) · [Command docs](#command-docs--code-values-for-ai-agents) ·
+[REST APIs](#rest-apis-mocaapi) · [Java code](#java-code-moca-java) ·
+[Agent context](#agent-context-from-documents-moca-context) · [Response format](#response-format) ·
+[Errors](#errors) · [Transactions](#transactions-batch--dryrun) · [Sessions](#sessions) · [Caveats](#caveats)
 
 ## Requirements
 
@@ -601,6 +631,239 @@ can search the index and open one page. Set `api.docs: false` to skip it.
 `INDEX.md` open with the private-repository notice, and the files name your server's host, so do not commit them to a public repository.
 A full WMS has several thousand operations: `moca.api.ts` is several megabytes and `moca-api/` is one file per operation,
 so use `include`, `exclude` or `methods` to shrink them.
+
+## Java code (moca-java)
+
+Many MOCA commands are Java methods. `mocakit generate` can read the server's Java classpath, download the JARs and
+classes of the parts you choose, and decompile your custom code with a decompiler you install, so a coding agent can
+read the code behind a command. It is opt-in and needs a live server.
+
+Only download or decompile code you are licensed to; vendor code may be covered by terms that prohibit decompiling it.
+
+### Enabling it
+
+```ts
+// mocakit.config.ts
+import { defineConfig } from 'mocakit';
+
+export default defineConfig({
+  out: 'src/moca.generated.ts',
+  java: true,   // or an object with any of these options (defaults shown):
+  // java: {
+  //   roots: ['$LESDIR'],          // classpath roots to download (see "Roots" below)
+  //   custom: [],                  // file-name globs always treated as custom code
+  //   libraries: [],               // file-name globs always treated as libraries (wins over custom)
+  //   dir: 'src/moca-java',        // default: moca-java next to `out`
+  //   docs: true,                  // README.md, INDEX.md and entries/
+  //   maxFileSize: 25 * 1024 * 1024, // bytes; bigger files are skipped with a warning
+  //   decompiler: undefined,       // a locally installed decompiler (see below); without it no source is produced
+  //   decompileLibraries: false,   // also decompile libraries, not only custom code
+  // },
+});
+```
+
+`mocakit generate --java` enables it for one run and `--no-java` disables it for one run even if the config enables
+it. Using both gives `mocakit: --java and --no-java cannot be used together`. `--dry-run` reads the server and reports
+counts without writing anything.
+
+mocakit reads the server only with the MOCA command `execute os command`, running fixed, read-only commands: it
+reads environment variables, lists folders, computes checksums and reads files. It never writes on the server.
+`execute os command` runs as the server's OS user, so it is a privileged command; if it isn't available, the run
+stops with:
+
+```
+Java introspection needs the MOCA command "execute os command", which is unavailable on this server (status N)
+```
+
+Nothing is written to your project unless every server read succeeded.
+
+### Roots
+
+The classpath is the source of truth: mocakit reads the server's `CLASSPATH` and never searches folders for JARs.
+A classpath entry is downloaded when it is under one of the `roots`. Each root is one of:
+
+- `$LESDIR` (the default), the folder in the server's `LESDIR` variable;
+- the name of a folder next to it: `cust` means the `cust` folder beside `$LESDIR`;
+- an absolute path, such as `/opt/acme/cust`.
+
+```ts
+java: { roots: ['$LESDIR', 'cust'] },
+```
+
+A root that matches no classpath entry is an error. Entries outside the roots are recorded by path only, and their
+files are not downloaded. Each downloaded file is checked against its sha256 on the server, and files that haven't
+changed since the last run aren't downloaded again.
+
+### Custom code, libraries and commands
+
+- **Custom or library.** An entry is a library when it has Maven coordinates or a versioned file name (such as
+  `widget-lib-2.1.0.jar`), and none of its classes implements a MOCA command. Everything else, including classes
+  folders, is custom. `custom` and `libraries` (file-name globs) override the guess; `libraries` wins when both match.
+- **Overridden classes.** Entries are read in classpath order and the first entry that provides a class wins. Later
+  entries with the same class are listed as overridden, in both entries' docs. If the server has `unzip` (Linux and
+  Unix), mocakit also lists the classes of entries outside the roots, without downloading them; otherwise their
+  classes are shown as unknown.
+- **Command links.** When command docs are generated in the same run, each Java command's page in `moca-commands/`
+  gains a line under its Implementation section: the entry that implements its class, whether it is custom or a
+  library, and a link to the decompiled source when there is one. A class from an entry outside the roots shows
+  `(not downloaded)`; a class the classpath doesn't provide shows `Class not found on the classpath`.
+
+### Decompiling
+
+mocakit has no decompiler of its own. Install one locally (for example CFR or Vineflower, plus Java) and point
+`decompiler` at it:
+
+```ts
+java: {
+  decompiler: {
+    command: 'java',
+    args: ['-jar', '/opt/tools/decompiler.jar', '{input}', '--outputdir', '{output}'],
+    // timeoutMs: 120000,   // per input; the default
+  },
+},
+```
+
+`{input}` is a JAR file or a classes folder and `{output}` is an empty folder. The command runs on your machine, in a
+temporary folder, without a shell; nothing is decompiled on the server. Custom entries are decompiled by default; set
+`decompileLibraries: true` to include libraries. An entry is decompiled again only when its files or the decompiler
+settings change.
+
+If the command can't be started, the run fails with `decompiler command "<command>" could not be started`. A failure
+or timeout on one input is a warning, and that entry has no source. Without a decompiler, mocakit logs
+`No decompiler configured; skipped Java source`.
+
+### Output
+
+```
+moca-java/
+  README.md                          # what the folder holds
+  INDEX.md                           # the classpath in order: kind, version, class count, linked commands
+  entries/<component>/<file>.md      # packages, classes, commands and overridden classes of one entry
+  jars/<component>/...               # downloaded JARs
+  classes/<component>/...            # downloaded .class files
+  src/<component>/<entry>/...        # decompiled source
+  manifest.json                      # entries, files, checksums, versions and decompiler settings
+```
+
+Unchanged files aren't rewritten and stale files are removed. Hand-written files in the docs paths are refused before
+anything is written, as for the other docs folders.
+
+`--from-snapshot` rebuilds the inventory, the command links and the docs from `moca-java/` without contacting the
+server, and decompiles again if the decompiler settings changed. The custom/library classification is reused from
+the previous `manifest.json`: changes to `java.custom` or `java.libraries` apply on the next live run. If the folder
+doesn't exist, the run fails with
+`Java introspection is enabled but <dir> does not exist; run generate against a server first, or pass --no-java`.
+
+### Keep it private
+
+The generated `README.md` and `INDEX.md` open with the private-repository notice and the licence line above. The
+downloaded code and decompiled source are your private material, so do not commit `moca-java/` to a public
+repository. Keep `jars/` and `classes/` out of git too: they are large binary files that the next
+`mocakit generate` downloads again.
+
+## Agent context from documents (moca-context)
+
+Your development guidelines, runbooks and specs are context an agent needs too. Drop the documents into a folder and
+mocakit turns them into Markdown, split by section and indexed, so a coding agent opens only the part it needs.
+Everything is converted locally; no server or credentials are needed.
+
+```bash
+npx mocakit context              # convert the documents in sources/ (works without a config file)
+npx mocakit context --dry-run    # report what would change, write nothing
+```
+
+`mocakit context` takes `--config <path>`, `--dry-run` and `--verbose`. `mocakit generate` runs the same step when the
+config enables `context`; `--context` enables it for one run and `--no-context` disables it for one run. Using both
+gives `mocakit: --context and --no-context cannot be used together`.
+
+```ts
+// mocakit.config.ts
+import { defineConfig } from 'mocakit';
+
+export default defineConfig({
+  context: true,   // or an object with any of these options (defaults shown):
+  // context: {
+  //   dir: 'src/moca-context',       // default: moca-context next to `out`
+  //   sources: 'src/moca-context/sources', // default: sources/ inside `dir`
+  //   converters: {},                // converter commands by extension (see below)
+  //   agent: [],                     // globs of documents your coding agent converts
+  //   maxSectionBytes: 61440,        // sections larger than this are split again
+  // },
+});
+```
+
+### Folder layout
+
+```
+moca-context/
+  sources/                           # your documents, any format
+  docs/<document>/README.md          # one document's sections, with their first sentences
+  docs/<document>/NN-<section>.md    # one file per section
+  agent/<document>.md                # Markdown written by your coding agent; mocakit never writes here
+  INDEX.md                           # every document and section
+  PENDING.md                         # documents waiting for agent conversion, with instructions
+  manifest.json                      # per source: checksum, method and sections
+```
+
+If `sources/` doesn't exist, it is created empty and mocakit logs `Put documents to convert in <sources>`. A document
+is converted again only when it, its converter settings or its agent file changed (changing `maxSectionBytes` splits
+every document again). Removing a source removes its `docs/` folder.
+
+### Formats and converters
+
+Built in: `.md` and `.txt` (used as they are), `.html` / `.htm`, `.docx` (headings, lists, tables, bold and italic;
+images become `[image: …]`) and `.csv` (a table of at most 500 rows).
+
+Any other format needs a converter: a command you install, set per extension (lowercase, with the dot). A converter
+also beats the built-in one for the same extension.
+
+```ts
+context: {
+  converters: {
+    '.pdf': { command: '/usr/bin/pdftotext', args: ['-layout', '{input}', '-'], output: 'text' },
+  },
+},
+```
+
+`{input}` is the document and `{output}` an output file; without `{output}` in `args` the result is the command's
+standard output. Converters run locally, in a temporary folder, without a shell, with a 120,000 ms default timeout
+(`timeoutMs`). `output` is `'markdown'` (the default) or `'text'`. A command that can't be started fails the run with
+`converter command "<command>" could not be started`; a converter that fails, times out or produces only whitespace
+sends that document to `PENDING.md` instead.
+
+**Text cleanup.** `output: 'text'` goes through a fixed cleanup. Lines repeated on more than half the pages (headers
+and footers, page numbers ignored) are removed. A dotted table of contents turns the matching lines in the body into
+headings and is then removed; without one, short title-case lines between blank lines become headings. Runs of blank
+lines collapse to one.
+
+### Agent conversion
+
+Some documents convert badly, such as a PDF full of screenshots of code. Your coding agent can convert those itself:
+
+1. List them under `agent` (globs matched against paths inside `sources/`), for example `agent: ['notes.docx']`.
+   Documents with no converter, or whose converter failed, are added automatically.
+2. Run `mocakit context`. It lists each one in `PENDING.md`, with its sha256, its target `agent/<document>.md` and
+   instructions for the agent.
+3. Ask the agent to work through `PENDING.md`. It writes `agent/<document>.md`, whose first line is exactly
+   `<!-- source-sha256: <hex> -->` with the source's sha256, followed by the whole document as Markdown.
+4. Run `mocakit context` again. It splits and indexes the agent's file.
+
+An agent file wins over the built-in and converter output. When the source changes, the sha line no longer matches:
+the document is back in `PENDING.md`, and its earlier sections are kept and marked `stale` in `INDEX.md`. mocakit
+never writes or deletes anything under `agent/`.
+
+### Sections and indexes
+
+Each document is split at its main heading level into `docs/<document>/NN-<section>.md`. A section larger than
+`maxSectionBytes` (default 61,440) is split again at the next heading level, or into parts. `docs/<document>/README.md`
+lists the sections with their first sentences, and `INDEX.md` lists every document, for example `guide.pdf` and
+`notes.docx`, with its sections, so an agent can find the right part and open only that.
+
+### Keep it private
+
+`INDEX.md` opens with the private-repository notice and the line
+`Sources may be confidential; keep this folder in a private repository.` Your documents and everything converted from
+them end up in this folder, so do not commit it to a public repository.
 
 ## Response format
 
