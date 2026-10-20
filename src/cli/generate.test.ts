@@ -7,6 +7,7 @@ import { answerOsCommand, fakeMoca, loginOk, mocaXml, type FakeRequest } from '.
 import { fakeOs, type FakeOsOptions } from '../../test/helpers/fake-os.js';
 import { buildZip } from '../../test/helpers/zip-builder.js';
 import { SQLSERVER_COLUMNS, SQLSERVER_KEYS } from '../codegen/introspect-schema.js';
+import { MocaTransportError } from '../errors.js';
 import type { RestRequest, RestResponse } from '../transport/rest.js';
 import { moduleSpecifier, resolveSchemaSettings, runGenerate } from './generate.js';
 
@@ -479,6 +480,20 @@ describe('runGenerate with schema', () => {
     await runGenerate({ dryRun: false, cwd: dir, env, io: run.io, deps: { transport: fake.transport } });
     expect(run.err).toEqual(['warning: Skipped schema: Unsupported database "db2"; mocakit supports SQL Server and Oracle; set schema: false to silence this']);
     expect(await exists(join(dir, 'src/moca.generated.ts'))).toBe(true);
+    expect(await exists(join(dir, 'src/moca-schema'))).toBe(false);
+  });
+
+  it.each([
+    ['a transport error', (): string => { throw new MocaTransportError('socket hang up'); }, /socket hang up/],
+    ['a protocol error', (): string => 'this is not a MOCA response', /Schema introspection failed/],
+  ])('on only by default, still fails on %s during the catalog read, writing nothing', async (_name, answer, message) => {
+    const dir = await tempDir();
+    const run = io();
+    const fake = fakeMoca((r) => (r.query === SQLSERVER_COLUMNS ? answer() : schemaServerHandler(r)));
+    await expect(runGenerate({ dryRun: false, cwd: dir, env, io: run.io, deps: { transport: fake.transport } })).rejects.toThrow(message);
+    expect(run.err.some((line) => line.includes('Skipped schema'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca.commands.json'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca.generated.ts'))).toBe(false);
     expect(await exists(join(dir, 'src/moca-schema'))).toBe(false);
   });
 

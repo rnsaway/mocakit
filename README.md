@@ -435,8 +435,9 @@ an error.
 Reading the schema needs a MOCA login with read access to the database catalog (`sys.*` on SQL Server, `USER_*`
 or `ALL_*` on Oracle). When schema is on only by default and the catalog can't be read (or the database isn't
 supported, or no tables are found), `generate` prints `warning: Skipped schema: <reason>; set schema: false to
-silence this` and writes everything else exactly as a `schema: false` run would. With `schema` in the config or
-`--schema`, the same failure stops the run and nothing is written.
+silence this` and writes everything else exactly as a `schema: false` run would. Connection, timeout, login and
+protocol errors still stop the run. With `schema` in the config or `--schema`, any schema failure stops the run and
+nothing is written.
 
 ### Outputs
 

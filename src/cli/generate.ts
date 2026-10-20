@@ -18,7 +18,7 @@ import { osExecFor, readJavaServer, type JavaServerRead } from '../java/server-r
 import { emit } from '../codegen/emit.js';
 import { emitSchema, filterTables, type SchemaFilter } from '../codegen/emit-schema.js';
 import { checkSchemaDocsTargets, emitSchemaDocs, writeSchemaDocs } from '../codegen/emit-schema-docs.js';
-import { introspectSchema, schemaSkipReason } from '../codegen/introspect-schema.js';
+import { introspectSchema, isSchemaCatalogError, schemaSkipReason } from '../codegen/introspect-schema.js';
 import { readSchemaSnapshot, sameSchema, writeSchemaSnapshot, type SchemaSnapshot } from '../codegen/schema-snapshot.js';
 import { filterCommands } from '../codegen/filter.js';
 import { introspect, type IntrospectResult } from '../codegen/introspect.js';
@@ -258,8 +258,9 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
         try {
           schemaResult = await introspectSchema(client, { version: VERSION, server: connection.url });
         } catch (error) {
-          // On only by default: a catalog the login can't read skips schema instead of failing the run.
-          if (schema.explicit) throw error;
+          // On only by default: a catalog the login can't read skips schema instead of failing the run;
+          // connection, login and protocol errors still fail it.
+          if (schema.explicit || !isSchemaCatalogError(error)) throw error;
           schemaSkipped = `Skipped schema: ${schemaSkipReason(error)}; set schema: false to silence this`;
           schema = null;
         }
