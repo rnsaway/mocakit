@@ -108,7 +108,9 @@ function isUsableManifest(m: JavaManifest): boolean {
       typeof decompiler.command === 'string' &&
       isStringArray(decompiler.args) &&
       isPlainObject(decompiler.inputs) &&
-      Object.values(decompiler.inputs).every((v) => typeof v === 'string')
+      Object.values(decompiler.inputs).every((v) => typeof v === 'string') &&
+      (decompiler.folders === undefined ||
+        (isPlainObject(decompiler.folders) && Object.values(decompiler.folders).every((v) => typeof v === 'string')))
     )
   ) {
     return false;
@@ -557,6 +559,7 @@ export async function buildJavaOutput(
   const sources = new Map<string, string>();
   const src: string[] = [];
   const inputsDone: Record<string, string> = {};
+  const foldersDone: Record<string, string> = {};
   // Entries (by classpath index) with at least one input decompiled or skipped as a library.
   const decompiledEntries = new Set<number>();
   const skippedEntries = new Set<number>();
@@ -570,6 +573,8 @@ export async function buildJavaOutput(
     decompiler !== null && previous?.decompiler !== undefined && decompilerHash(previous.decompiler) === decompilerHash(decompiler)
       ? previous.decompiler.inputs
       : undefined;
+  // A manifest without folders (or with another folder for this input) never lends its source.
+  const previousFolders = previousInputs !== undefined ? (previous?.decompiler?.folders ?? {}) : {};
   let checked = false;
   for (const item of items) {
     for (const found of decompileInputs(item, family, lesDir)) {
@@ -591,11 +596,13 @@ export async function buildJavaOutput(
       }
       if (decompiler === null) continue;
       const kept = (previous?.src ?? []).filter((p) => p.startsWith(`${input.prefix}/`));
-      if (!needsDecompile(previousInputs, input.key, input.hash) && kept.length > 0) {
+      const sameFolder = previousFolders[input.key] === input.prefix;
+      if (sameFolder && !needsDecompile(previousInputs, input.key, input.hash) && kept.length > 0) {
         const present = await Promise.all(kept.map((p) => fileExists(join(ctx.dir, ...p.split('/')))));
         if (present.every(Boolean)) {
           src.push(...kept);
           inputsDone[input.key] = input.hash;
+          foldersDone[input.key] = input.prefix;
           continue;
         }
       }
@@ -619,6 +626,7 @@ export async function buildJavaOutput(
         src.push(path);
       }
       inputsDone[input.key] = input.hash;
+      foldersDone[input.key] = input.prefix;
       decompiledEntries.add(item.record.index);
     }
   }
@@ -633,7 +641,7 @@ export async function buildJavaOutput(
     roots: read !== null ? settings.roots : previous!.roots,
     entries,
     overridden,
-    ...(decompiler !== null ? { decompiler: { command: decompiler.command, args: decompiler.args, inputs: inputsDone } } : {}),
+    ...(decompiler !== null ? { decompiler: { command: decompiler.command, args: decompiler.args, inputs: inputsDone, folders: foldersDone } } : {}),
     src,
     ...(commands !== undefined ? { commands } : {}),
   };

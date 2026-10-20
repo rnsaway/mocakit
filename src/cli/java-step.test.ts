@@ -8,7 +8,7 @@ import { buildZip } from '../../test/helpers/zip-builder.js';
 import type { CommandInfo } from '../codegen/introspect-agent.js';
 import type { JavaManifest } from '../java/manifest.js';
 import { readJavaServer } from '../java/server-reader.js';
-import { buildJavaOutput, resolveJavaSettings, writeJavaOutput, type ResolvedJava } from './java-step.js';
+import { buildJavaOutput, loadPreviousJava, resolveJavaSettings, writeJavaOutput, type ResolvedJava } from './java-step.js';
 
 const tempDirs: string[] = [];
 async function tempDir() {
@@ -252,6 +252,57 @@ describe('per-JAR classification', { timeout: 30_000 }, () => {
     expect(srcFolders(output.sources)).toEqual(['src/cust/lib-acme-a', 'src/cust/lib-x', 'src/cust/lib-x-2']);
     expect(output.manifest.src).toEqual([...new Set(output.manifest.src)]);
     expect(output.manifest.src).toHaveLength(3);
+  });
+});
+
+// Two runs each; they spawn the fake decompiler.
+describe('decompiled source folders across runs', { timeout: 60_000 }, () => {
+  const X = buildZip({ 'com/acme/cust/Widgets.class': 'x' });
+  const LIBX = buildZip({ 'com/acme/cust/Other.class': 'o' });
+  const settings = (dir: string) => settingsFor(dir, { decompiler: DECOMPILER });
+  async function run(dir: string, classpath: string, files: Record<string, Uint8Array>) {
+    const { previous, cache } = await loadPreviousJava(dir);
+    const output = await buildJavaOutput(await serverRead(classpath, files), previous, settings(dir), { ...ctx(dir), cache });
+    await writeJavaOutput(settings(dir), output, previous, false);
+    return output;
+  }
+
+  it('re-decompiles an input whose folder changed, and keeps none of the previous owner files', async () => {
+    const dir = await tempDir();
+    const first = await run(dir, '/opt/acme/cust/lib/*:/opt/acme/cust/lib-x.jar', { '/opt/acme/cust/lib/x.jar': X, '/opt/acme/cust/lib-x.jar': LIBX });
+    expect(first.manifest.decompiler?.folders).toEqual({ 'jars/cust/lib/x.jar': 'src/cust/lib-x', 'jars/cust/lib-x.jar': 'src/cust/lib-x-2' });
+    // A source file only x.jar produced.
+    const onlyX = 'src/cust/lib-x/com/acme/cust/OnlyX.java';
+    await writeFile(join(dir, ...onlyX.split('/')), 'class OnlyX {}');
+    const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')) as JavaManifest;
+    manifest.src = [...manifest.src, onlyX].sort();
+    await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest));
+
+    const second = await run(dir, '/opt/acme/cust/lib-x.jar', { '/opt/acme/cust/lib-x.jar': LIBX });
+    expect([...second.sources.keys()]).toEqual(['src/cust/lib-x/com/acme/cust/Widgets.java']);
+    expect(second.manifest.src).toEqual(['src/cust/lib-x/com/acme/cust/Widgets.java']);
+    expect(second.manifest.decompiler?.folders).toEqual({ 'jars/cust/lib-x.jar': 'src/cust/lib-x' });
+    expect(await exists(join(dir, ...onlyX.split('/')))).toBe(false);
+    expect(await exists(join(dir, 'src/cust/lib-x-2'))).toBe(false);
+  });
+
+  it('does not reuse sources across inputs when the classpath order changes', async () => {
+    const dir = await tempDir();
+    const files = { '/opt/acme/cust/lib/x.jar': X, '/opt/acme/cust/lib-x.jar': LIBX };
+    await run(dir, '/opt/acme/cust/lib/*:/opt/acme/cust/lib-x.jar', files);
+    const second = await run(dir, '/opt/acme/cust/lib-x.jar:/opt/acme/cust/lib/*', files);
+    expect([...second.sources.keys()].sort()).toEqual(['src/cust/lib-x-2/com/acme/cust/Widgets.java', 'src/cust/lib-x/com/acme/cust/Widgets.java']);
+    expect(second.stats.decompiled).toBe(2);
+    expect(second.manifest.decompiler?.folders).toEqual({ 'jars/cust/lib-x.jar': 'src/cust/lib-x', 'jars/cust/lib/x.jar': 'src/cust/lib-x-2' });
+  });
+
+  it('still reuses sources when the input keeps its folder', async () => {
+    const dir = await tempDir();
+    const files = { '/opt/acme/cust/lib/x.jar': X, '/opt/acme/cust/lib-x.jar': LIBX };
+    await run(dir, '/opt/acme/cust/lib/*:/opt/acme/cust/lib-x.jar', files);
+    const second = await run(dir, '/opt/acme/cust/lib/*:/opt/acme/cust/lib-x.jar', files);
+    expect(second.sources.size).toBe(0);
+    expect(second.manifest.src).toHaveLength(2);
   });
 });
 

@@ -41,7 +41,13 @@ export interface JavaManifest {
   /** winner and losers are entry paths. */
   overridden: Array<{ className: string; winner: string; losers: string[] }>;
   /** `inputs` maps a local path to the hash that was decompiled. */
-  decompiler?: { command: string; args: string[]; inputs: Record<string, string> };
+  decompiler?: {
+    command: string;
+    args: string[];
+    inputs: Record<string, string>;
+    /** Maps an input's local path to its `src/...` folder; earlier source is reused only when the folder is unchanged. */
+    folders?: Record<string, string>;
+  };
   /** Relative paths of written .java files. */
   src: string[];
   /**
