@@ -1,5 +1,5 @@
 import type { MocaClient } from '../client/client.js';
-import { MocaError } from '../errors.js';
+import { MocaCommandError, MocaError } from '../errors.js';
 import type { MocaRow } from '../types.js';
 import { redactUrl } from '../util/url.js';
 import { normalizeSchema, type Dialect, type RawSchema } from './schema-normalize.js';
@@ -80,7 +80,7 @@ async function detectDialect(client: MocaClient): Promise<Dialect> {
   const value = typeof first === 'string' ? first.trim() : '';
   const lower = value.toLowerCase();
   if (lower === 'sqlserver' || lower === 'oracle') return lower;
-  throw new Error(`Unsupported database "${value}"; mocakit supports SQL Server and Oracle`);
+  throw new SchemaUnavailableError(`Unsupported database "${value}"; mocakit supports SQL Server and Oracle`);
 }
 
 async function readCatalog(client: MocaClient, dialect: Dialect): Promise<RawSchema> {
@@ -97,14 +97,40 @@ async function readCatalog(client: MocaClient, dialect: Dialect): Promise<RawSch
   return { columns, keys: await client.exec(oracleKeys(scope)) };
 }
 
+/** Ends the catalog-failure error; `schemaSkipReason` strips it for the default-on warning. */
+export const SCHEMA_SKIP_HINT = 'Set schema: false in the config (or pass --no-schema) to skip it.';
+
 function wrap(error: unknown): Error {
   const status = error instanceof MocaError && error.status !== -1 ? ` (MOCA status ${error.status})` : '';
   const message = error instanceof Error ? error.message : String(error);
   return new Error(
     `Schema introspection failed${status}: ${message}. The MOCA login needs read access to the database catalog ` +
-      '(sys.* on SQL Server, USER_* on Oracle). Remove "schema" from the config (or pass --no-schema) to skip it.',
+      `(sys.* on SQL Server, USER_* on Oracle). ${SCHEMA_SKIP_HINT}`,
     { cause: error },
   );
+}
+
+/** The database has no schema mocakit can read: unsupported database, or no tables found. */
+export class SchemaUnavailableError extends Error {
+  override name = 'SchemaUnavailableError';
+}
+
+/**
+ * True for a lasting gap in what the login can see, which schema that is on only by default skips:
+ * a MOCA command status from the catalog read (such as missing catalog permission), an unsupported
+ * database, or no tables. Transport, timeout, login and protocol errors are not.
+ */
+export function isSchemaCatalogError(error: unknown): boolean {
+  if (error instanceof SchemaUnavailableError) return true;
+  const cause = error instanceof Error && error.cause !== undefined ? error.cause : error;
+  return cause instanceof MocaCommandError;
+}
+
+/** The reason part of a schema introspection error, without the skip hint or a final period. */
+export function schemaSkipReason(error: unknown): string {
+  let message = error instanceof Error ? error.message : String(error);
+  if (message.endsWith(` ${SCHEMA_SKIP_HINT}`)) message = message.slice(0, -SCHEMA_SKIP_HINT.length - 1);
+  return message.endsWith('.') ? message.slice(0, -1) : message;
 }
 
 /** Reads the login schema's tables, views, columns, comments and primary keys. */
@@ -117,7 +143,7 @@ export async function introspectSchema(
   try {
     dialect = await detectDialect(client);
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Unsupported database')) throw error;
+    if (error instanceof SchemaUnavailableError) throw error;
     throw wrap(error);
   }
   try {
@@ -126,7 +152,7 @@ export async function introspectSchema(
     throw wrap(error);
   }
   const { tables, warnings } = normalizeSchema(dialect, raw);
-  if (tables.length === 0) throw new Error("Schema introspection found no tables in the MOCA login's schema");
+  if (tables.length === 0) throw new SchemaUnavailableError("Schema introspection found no tables in the MOCA login's schema");
   return {
     snapshot: {
       mocakitVersion: options.version,

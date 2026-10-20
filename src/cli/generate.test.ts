@@ -1,10 +1,13 @@
-import { access, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { fakeMoca, loginOk, mocaXml, type FakeRequest } from '../../test/helpers/fake-moca.js';
+import { answerOsCommand, fakeMoca, loginOk, mocaXml, type FakeRequest } from '../../test/helpers/fake-moca.js';
+import { fakeOs, type FakeOsOptions } from '../../test/helpers/fake-os.js';
+import { buildZip } from '../../test/helpers/zip-builder.js';
 import { SQLSERVER_COLUMNS, SQLSERVER_KEYS } from '../codegen/introspect-schema.js';
+import { MocaTransportError } from '../errors.js';
 import type { RestRequest, RestResponse } from '../transport/rest.js';
 import { moduleSpecifier, resolveSchemaSettings, runGenerate } from './generate.js';
 
@@ -60,6 +63,7 @@ describe('runGenerate', () => {
     });
     const { io: cliIo } = io();
     await runGenerate({
+      schema: false,
       dryRun: false,
       cwd: dir,
       env: { MOCA_USER: 'u', MOCA_PASSWORD: 'p' },
@@ -127,6 +131,7 @@ describe('runGenerate', () => {
     });
     const { io: cliIo, out } = io();
     await runGenerate({
+      schema: false,
       dryRun: false,
       cwd: dir,
       env: { MOCA_URL: 'https://moca.test/service', MOCA_USER: 'u', MOCA_PASSWORD: 'p' },
@@ -270,13 +275,13 @@ describe('runGenerate', () => {
       const dir = await tempDir();
       const snapshotFile = join(dir, 'src', 'moca.commands.json');
       const fake = introspectingServer([['list orders']]);
-      await runGenerate({ out: 'src/moca.generated.ts', dryRun: false, cwd: dir, env, io: io().io, deps: { transport: fake.transport } });
+      await runGenerate({ schema: false, out: 'src/moca.generated.ts', dryRun: false, cwd: dir, env, io: io().io, deps: { transport: fake.transport } });
       const first = await readFile(snapshotFile, 'utf8');
       const stale = first.replace(/"generatedAt": "[^"]*"/, '"generatedAt": "2000-01-01T00:00:00.000Z"');
       await writeFile(snapshotFile, stale);
 
       const { io: cliIo, out } = io();
-      await runGenerate({ out: 'src/moca.generated.ts', dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: fake.transport } });
+      await runGenerate({ schema: false, out: 'src/moca.generated.ts', dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: fake.transport } });
       expect(await readFile(snapshotFile, 'utf8')).toBe(stale);
       expect(out).toContain(`Snapshot unchanged: ${snapshotFile}`);
     });
@@ -285,6 +290,7 @@ describe('runGenerate', () => {
       const dir = await tempDir();
       const snapshotFile = join(dir, 'src', 'moca.commands.json');
       await runGenerate({
+        schema: false,
         out: 'src/moca.generated.ts',
         dryRun: false,
         cwd: dir,
@@ -293,6 +299,7 @@ describe('runGenerate', () => {
         deps: { transport: introspectingServer([['list orders']]).transport },
       });
       await runGenerate({
+        schema: false,
         out: 'src/moca.generated.ts',
         dryRun: false,
         cwd: dir,
@@ -308,6 +315,7 @@ describe('runGenerate', () => {
       const dir = await tempDir();
       const { io: cliIo, err } = io();
       await runGenerate({
+        schema: false,
         out: 'src/moca.generated.ts',
         dryRun: true,
         cwd: dir,
@@ -401,6 +409,30 @@ describe('runGenerate with schema', () => {
     expect(await exists(join(dir, 'src/moca.schema.json'))).toBe(false);
   });
 
+  it('is on by default: a live run with no flag or config writes the schema', async () => {
+    const dir = await tempDir();
+    await runGenerate({ dryRun: false, cwd: dir, env, io: io().io, deps: { transport: schemaServer().transport } });
+    expect(await exists(join(dir, 'src/moca.schema.json'))).toBe(true);
+    expect(await readFile(join(dir, 'src/moca.generated.ts'), 'utf8')).toContain('from "./moca.schema.js"');
+  });
+
+  it('is turned off by schema: false, and is explicit only when the flag or config asks for it', () => {
+    expect(resolveSchemaSettings({ schema: false }, undefined, '/c', '/c/src/a.ts')).toBeNull();
+    expect(resolveSchemaSettings({}, undefined, '/c', '/c/src/a.ts')?.explicit).toBe(false);
+    expect(resolveSchemaSettings({}, true, '/c', '/c/src/a.ts')?.explicit).toBe(true);
+    expect(resolveSchemaSettings({ schema: { views: false } }, undefined, '/c', '/c/src/a.ts')?.explicit).toBe(true);
+  });
+
+  it('on only by default, skips schema on a snapshot run without a schema snapshot', async () => {
+    const dir = await tempDir();
+    const { io: cliIo, out } = io();
+    await runGenerate({ fromSnapshot: fixture, dryRun: false, cwd: dir, env: {}, io: cliIo });
+    expect(out).toContain(`Skipped schema: ${join(dir, 'src/moca.schema.json')} does not exist (--from-snapshot)`);
+    expect(await exists(join(dir, 'src/moca.schema.ts'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca-schema'))).toBe(false);
+    expect(await readFile(join(dir, 'src/moca.generated.ts'), 'utf8')).not.toContain('moca.schema.js');
+  });
+
   it('writes nothing at all when the schema introspection fails', async () => {
     const dir = await tempDir();
     const fake = schemaServer({ keys: mocaXml(511, {}, 'permission denied') });
@@ -410,6 +442,83 @@ describe('runGenerate with schema', () => {
     expect(await exists(join(dir, 'src/moca.commands.json'))).toBe(false);
     expect(await exists(join(dir, 'src/moca.generated.ts'))).toBe(false);
     expect(await exists(join(dir, 'src/moca.schema.json'))).toBe(false);
+  });
+
+  it('on only by default, skips schema with a warning when the catalog cannot be read', async () => {
+    const listing = async (root: string): Promise<string[]> => {
+      const entries = await readdir(root, { recursive: true, withFileTypes: true });
+      return entries.map((e) => join(e.parentPath, e.name).slice(root.length).split('\\').join('/')).sort();
+    };
+    const failing = () => schemaServer({ keys: mocaXml(511, {}, 'permission denied') });
+
+    const dir = await tempDir();
+    const run = io();
+    await runGenerate({ commandDocs: true, dryRun: false, cwd: dir, env, io: run.io, deps: { transport: failing().transport } });
+
+    const off = await tempDir();
+    const offRun = io();
+    await runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: off, env, io: offRun.io, deps: { transport: failing().transport } });
+
+    expect(await exists(join(dir, 'src/moca.schema.json'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca.schema.ts'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca-schema'))).toBe(false);
+    expect(await listing(dir)).toEqual(await listing(off));
+    expect(await readFile(join(dir, 'src/moca.generated.ts'), 'utf8')).toBe(await readFile(join(off, 'src/moca.generated.ts'), 'utf8'));
+    expect(run.out.map((line) => line.split(dir).join('<dir>'))).toEqual(offRun.out.map((line) => line.split(off).join('<dir>')));
+    expect(run.out).toContain('Command docs written without table cross-references (schema is off)');
+    expect(run.err).toEqual([
+      'warning: Skipped schema: Schema introspection failed (MOCA status 511): MOCA command failed with status 511: permission denied. The MOCA login needs read access ' +
+        'to the database catalog (sys.* on SQL Server, USER_* on Oracle); set schema: false to silence this',
+    ]);
+    expect(offRun.err).toEqual([]);
+  });
+
+  it('on only by default, skips schema with a warning on an unsupported database', async () => {
+    const dir = await tempDir();
+    const run = io();
+    const fake = fakeMoca((r) => (r.query === 'get database' ? mocaXml(0, { columns: [{ name: 'database' }], rows: [['db2']] }) : schemaServerHandler(r)));
+    await runGenerate({ dryRun: false, cwd: dir, env, io: run.io, deps: { transport: fake.transport } });
+    expect(run.err).toEqual(['warning: Skipped schema: Unsupported database "db2"; mocakit supports SQL Server and Oracle; set schema: false to silence this']);
+    expect(await exists(join(dir, 'src/moca.generated.ts'))).toBe(true);
+    expect(await exists(join(dir, 'src/moca-schema'))).toBe(false);
+  });
+
+  it('prints the default-on skip warning even past the warning cap', async () => {
+    const dir = await tempDir();
+    const run = io();
+    const bad = Array.from({ length: 60 }, (_, i) => [`bad'name${i}`]);
+    const fake = fakeMoca((r) => {
+      if (r.query === 'list active commands') return mocaXml(0, { columns: [{ name: 'command' }], rows: [['list orders'], ...bad] });
+      if (r.query === SQLSERVER_KEYS) return mocaXml(511, {}, 'permission denied');
+      return schemaServerHandler(r);
+    });
+    await runGenerate({ dryRun: false, cwd: dir, env, io: run.io, deps: { transport: fake.transport } });
+    expect(run.err.filter((line) => line.startsWith('warning: Skipped schema: '))).toHaveLength(1);
+    expect(run.err.filter((line) => line.startsWith(`warning: Skipped command "bad'name`))).toHaveLength(50);
+    expect(run.err.at(-1)).toBe('... and 10 more warnings (use --verbose to see all)');
+  });
+
+  it.each([
+    ['a transport error', (): string => { throw new MocaTransportError('socket hang up'); }, /socket hang up/],
+    ['a protocol error', (): string => 'this is not a MOCA response', /Schema introspection failed/],
+  ])('on only by default, still fails on %s during the catalog read, writing nothing', async (_name, answer, message) => {
+    const dir = await tempDir();
+    const run = io();
+    const fake = fakeMoca((r) => (r.query === SQLSERVER_COLUMNS ? answer() : schemaServerHandler(r)));
+    await expect(runGenerate({ dryRun: false, cwd: dir, env, io: run.io, deps: { transport: fake.transport } })).rejects.toThrow(message);
+    expect(run.err.some((line) => line.includes('Skipped schema'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca.commands.json'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca.generated.ts'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca-schema'))).toBe(false);
+  });
+
+  it('explicit --schema still fails on a catalog error, with the schema: false hint', async () => {
+    const dir = await tempDir();
+    const fake = schemaServer({ keys: mocaXml(511, {}, 'permission denied') });
+    await expect(
+      runGenerate({ schema: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: fake.transport } }),
+    ).rejects.toThrow('Set schema: false in the config (or pass --no-schema) to skip it.');
+    expect(await exists(join(dir, 'src/moca.generated.ts'))).toBe(false);
   });
 
   it('refuses to run, writing nothing, when a hand-written file is in the docs directory', async () => {
@@ -582,7 +691,7 @@ describe('runGenerate with command docs and codes', () => {
     const dir = await tempDir();
     const fake = agentServer({ triggers: mocaXml(511, {}, 'denied') });
     await expect(
-      runGenerate({ commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: fake.transport } }),
+      runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: fake.transport } }),
     ).rejects.toThrow(/^Reading triggers failed \(MOCA status 511\)/);
     expect(await exists(join(dir, 'src/moca.commands.json'))).toBe(false);
   });
@@ -599,7 +708,7 @@ describe('runGenerate with command docs and codes', () => {
     const dir = await tempDir();
     await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ commandDocs: { source: 'all' } }));
     const { io: cliIo, out } = io();
-    await runGenerate({ dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: agentServer().transport } });
+    await runGenerate({ schema: false, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: agentServer().transport } });
     expect(out).toContain('Command docs written without table cross-references (schema is off)');
     expect(out).toContain("Command docs include Blue Yonder product source (commandDocs.source = 'all'); keep them in a private repository.");
     expect(await readFile(join(dir, 'src/moca-commands/commands/list-orders.md'), 'utf8')).toContain('[select a from widget]');
@@ -711,5 +820,393 @@ describe('runGenerate with the REST API', () => {
     ).rejects.toThrow(/INDEX\.md exists and was not generated by mocakit/);
     expect(await readFile(join(dir, 'src/moca-api/INDEX.md'), 'utf8')).toBe('# hand-written\n');
     for (const f of ['src/moca.commands.json', 'src/moca.generated.ts', 'src/moca.api.json', 'src/moca.api.ts']) expect(await exists(join(dir, f))).toBe(false);
+  });
+});
+
+/** A symbolic link, or on Windows without the right to create one, a junction (both lstat as links). */
+async function makeLink(target: string, path: string, type: 'file' | 'dir'): Promise<void> {
+  try {
+    await symlink(target, path, type);
+  } catch (error) {
+    if (process.platform !== 'win32') throw error;
+    await symlink(target, path, 'junction');
+  }
+}
+
+const canLink = await (async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mocakit-link-'));
+  try {
+    await makeLink(join(dir, 'missing'), join(dir, 'link'), 'file');
+    return (await lstat(join(dir, 'link'))).isSymbolicLink();
+  } catch {
+    return false;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+})();
+
+const FAKE_DECOMPILER = fileURLToPath(new URL('../../test/fixtures/fake-decompiler.mjs', import.meta.url));
+const JAVA_CLASSPATH = '/opt/acme/cust/lib/*:/opt/acme/cust/thirdparty/*:/opt/acme/cust/classes:/opt/acme/moca/lib/*:rel/x.jar';
+
+function javaFiles(): Record<string, Uint8Array> {
+  return {
+    '/opt/acme/cust/lib/acme-cust.jar': buildZip({ 'com/acme/cust/Widgets.class': 'w', 'com/acme/base/Shared.class': 's' }),
+    '/opt/acme/cust/thirdparty/acme-util-1.2.0.jar': buildZip({
+      'META-INF/maven/com.acme/acme-util/pom.properties': 'groupId=com.acme\nartifactId=acme-util\nversion=1.2.0\n',
+      'com/acme/util/Strings.class': 'u',
+    }),
+    '/opt/acme/cust/classes/com/acme/cust/Extra.class': new Uint8Array([0xca, 0xfe, 0xba, 0xbe]),
+    '/opt/acme/moca/lib/acme-moca.jar': buildZip({ 'com/acme/base/Shared.class': 'b' }),
+  };
+}
+
+function javaServer(os: Partial<FakeOsOptions> = {}) {
+  const server = fakeOs({ family: 'posix', env: { LESDIR: '/opt/acme/cust', CLASSPATH: JAVA_CLASSPATH }, files: javaFiles(), ...os });
+  const moca = fakeMoca(async (r) => {
+    const answer = await answerOsCommand(r.query, server.exec);
+    if (answer !== null) return answer;
+    if (r.query.startsWith('login user')) return loginOk();
+    if (r.query === 'list active commands') {
+      return mocaXml(0, {
+        columns: [
+          { name: 'cmplvl' }, { name: 'cmplvlseq', type: 'I' }, { name: 'command' }, { name: 'type' },
+          { name: 'syntax' }, { name: 'desc' }, { name: 'class' }, { name: 'functn' },
+        ],
+        rows: [['USRwid', '9000', 'move widget', 'Java Method', null, 'Moves a widget', 'com.acme.cust.Widgets', 'moveWidget']],
+      });
+    }
+    return mocaXml(0);
+  });
+  return { ...moca, os: server };
+}
+
+const isOsCommand = (r: FakeRequest) => r.query.startsWith('execute os command');
+
+async function filesUnder(root: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const walk = async (dir: string, prefix: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) await walk(join(dir, entry.name), rel);
+      else out.set(rel, (await readFile(join(dir, entry.name))).toString('base64'));
+    }
+  };
+  await walk(root, '');
+  return out;
+}
+
+// These runs spawn the fake decompiler (a node process per input), which is slow on a busy machine.
+describe('runGenerate with Java introspection', { timeout: 30_000 }, () => {
+  const env = { MOCA_URL: 'https://moca.test/service', MOCA_USER: 'u', MOCA_PASSWORD: 'p' };
+  const decompilerConfig = { java: { decompiler: { command: process.execPath, args: [FAKE_DECOMPILER, '{input}', '{output}'] } } };
+
+  it('downloads, decompiles and documents the classpath, linking command docs to the implementation', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify(decompilerConfig));
+    const server = javaServer();
+    const { io: cliIo, out, err } = io();
+    await runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: server.transport } });
+    const java = join(dir, 'src/moca-java');
+
+    expect(out).toContain('Read classpath: 5 entries (3 selected, 3 files, 0.0 MB)');
+    expect(out).toContain('Downloaded 3 files (0.0 MB, 0 unchanged)');
+    expect(out).toContain('Decompiled 2 entries (1 skipped: libraries)');
+    expect(out).toContain(`Wrote Java inventory to ${java}`);
+    expect(err).toContain('warning: classpath entry "rel/x.jar" is not an absolute path; skipped');
+
+    expect(new Uint8Array(await readFile(join(java, 'jars/cust/lib/acme-cust.jar')))).toEqual(javaFiles()['/opt/acme/cust/lib/acme-cust.jar']);
+    expect(await exists(join(java, 'jars/cust/thirdparty/acme-util-1.2.0.jar'))).toBe(true);
+    expect(await exists(join(java, 'classes/cust/classes/com/acme/cust/Extra.class'))).toBe(true);
+    expect(await readFile(join(java, 'src/cust/lib-acme-cust/com/acme/cust/Widgets.java'), 'utf8')).toContain('class Widgets');
+    expect(await exists(join(java, 'src/cust/classes/com/acme/cust/Widgets.java'))).toBe(true);
+    expect(await exists(join(java, 'src/cust/thirdparty-acme-util-1.2.0'))).toBe(false);
+
+    const manifest = JSON.parse(await readFile(join(java, 'manifest.json'), 'utf8'));
+    expect(manifest.entries.map((e: { path: string; selected: boolean; kind?: string }) => [e.path, e.selected, e.kind])).toEqual([
+      ['/opt/acme/cust/lib', true, 'custom'],
+      ['/opt/acme/cust/thirdparty', true, 'library'],
+      ['/opt/acme/cust/classes', true, 'custom'],
+      ['/opt/acme/moca/lib', false, 'custom'],
+      ['rel/x.jar', false, undefined],
+    ]);
+    expect(manifest.overridden).toEqual([{ className: 'com.acme.base.Shared', winner: '/opt/acme/cust/lib', losers: ['/opt/acme/moca/lib'] }]);
+    expect(manifest.src).toEqual(['src/cust/classes/com/acme/cust/Widgets.java', 'src/cust/lib-acme-cust/com/acme/cust/Widgets.java']);
+
+    expect(await readFile(join(java, 'README.md'), 'utf8')).toContain('Only download or decompile code you are licensed to');
+    expect(await readFile(join(java, 'entries/cust/lib-acme-cust.md'), 'utf8')).toContain(
+      '- [`move widget`](../../../moca-commands/commands/move-widget.md): `com.acme.cust.Widgets.moveWidget`',
+    );
+    expect(await readFile(join(dir, 'src/moca-commands/commands/move-widget.md'), 'utf8')).toContain(
+      'Implemented in `/opt/acme/cust/lib` (custom) — source: [`src/cust/lib-acme-cust/com/acme/cust/Widgets.java`](../../moca-java/src/cust/lib-acme-cust/com/acme/cust/Widgets.java)',
+    );
+  });
+
+  it('downloads nothing and leaves every file byte-identical on a second run', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify(decompilerConfig));
+    await runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } });
+    const java = join(dir, 'src/moca-java');
+    const before = await filesUnder(java);
+    const manifestTime = (await stat(join(java, 'manifest.json'))).mtimeMs;
+
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: javaServer().transport } });
+    expect(out).toContain('Downloaded 0 files (0.0 MB, 3 unchanged)');
+    expect(out).toContain('Decompiled 0 entries (1 skipped: libraries)');
+    expect(await filesUnder(java)).toEqual(before);
+    expect((await stat(join(java, 'manifest.json'))).mtimeMs).toBe(manifestTime);
+  });
+
+  it('treats a damaged manifest as no previous manifest and downloads everything again', async () => {
+    const dir = await tempDir();
+    await runGenerate({ schema: false, java: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } });
+    await writeFile(join(dir, 'src/moca-java/manifest.json'), '{"entries": [{"files": 3}]}');
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: false, java: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: javaServer().transport } });
+    expect(out).toContain('Downloaded 3 files (0.0 MB, 0 unchanged)');
+    expect(out).toContain('No decompiler configured; skipped Java source');
+  });
+
+  it.each([
+    ['decompiler: null', (m: Record<string, unknown>) => ({ ...m, decompiler: null })],
+    ['decompiler.command not a string', (m: Record<string, unknown>) => ({ ...m, decompiler: { command: 1 } })],
+    ['decompiler.inputs with a non-string value', (m: Record<string, unknown>) => ({ ...m, decompiler: { command: 'x', args: [], inputs: { a: 1 } } })],
+    ['a malformed commands element', (m: Record<string, unknown>) => ({ ...m, commands: [{ key: 'move widget', name: 7 }] })],
+    ['commands not an array', (m: Record<string, unknown>) => ({ ...m, commands: 'x' })],
+  ])('treats a manifest with %s as no previous manifest (full download, no crash)', async (_name, damage) => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify(decompilerConfig));
+    await runGenerate({ schema: false, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } });
+    const file = join(dir, 'src/moca-java/manifest.json');
+    await writeFile(file, JSON.stringify(damage(JSON.parse(await readFile(file, 'utf8')))));
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: false, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: javaServer().transport } });
+    expect(out).toContain('Downloaded 3 files (0.0 MB, 0 unchanged)');
+    expect(out).toContain('Decompiled 2 entries (1 skipped: libraries)');
+  });
+
+  it('removes the files of a JAR that left the server', async () => {
+    const dir = await tempDir();
+    await runGenerate({ schema: false, java: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } });
+    const files = javaFiles();
+    delete files['/opt/acme/cust/thirdparty/acme-util-1.2.0.jar'];
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: false, java: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: javaServer({ files }).transport } });
+    expect(out).toContain('Removed 1 stale Java files');
+    expect(await exists(join(dir, 'src/moca-java/jars/cust/thirdparty'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca-java/jars/cust/lib/acme-cust.jar'))).toBe(true);
+  });
+
+  it('writes nothing at all when a checksum does not match', async () => {
+    const dir = await tempDir();
+    const server = javaServer({ corrupt: ['/opt/acme/cust/lib/acme-cust.jar'] });
+    await expect(
+      runGenerate({ schema: false, java: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: server.transport } }),
+    ).rejects.toThrow(/^checksum mismatch for \/opt\/acme\/cust\/lib\/acme-cust\.jar/);
+    expect(server.requests.at(-1)?.query).toBe('logout user');
+    for (const f of ['src/moca.commands.json', 'src/moca.generated.ts', 'src/moca-commands/INDEX.md', 'src/moca-java']) {
+      expect(await exists(join(dir, f))).toBe(false);
+    }
+  });
+
+  it('lists, downloads and verifies inner-class files whose names contain $', async () => {
+    const dir = await tempDir();
+    const inner = new Uint8Array([0xca, 0xfe, 0xba, 0xbe, 1]);
+    const files = { ...javaFiles(), '/opt/acme/cust/build/classes/com/acme/cust/Widget$1.class': inner };
+    const server = javaServer({ files, env: { LESDIR: '/opt/acme/cust', CLASSPATH: `${JAVA_CLASSPATH}:/opt/acme/cust/build/classes` } });
+    const { io: cliIo, out, err } = io();
+    await runGenerate({ schema: false, java: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: server.transport } });
+    expect(out).toContain('Downloaded 4 files (0.0 MB, 0 unchanged)');
+    expect(err.filter((l) => l.includes('$'))).toEqual([]);
+    expect(server.os.commands.some((c) => c.startsWith('sha256sum ') && c.includes("'/opt/acme/cust/build/classes/com/acme/cust/Widget$1.class'"))).toBe(true);
+    expect(new Uint8Array(await readFile(join(dir, 'src/moca-java/classes/cust/build/classes/com/acme/cust/Widget$1.class')))).toEqual(inner);
+    const manifest = JSON.parse(await readFile(join(dir, 'src/moca-java/manifest.json'), 'utf8'));
+    const entry = manifest.entries.find((e: { path: string }) => e.path === '/opt/acme/cust/build/classes');
+    expect(entry.files.map((f: { local: string }) => f.local)).toEqual(['classes/cust/build/classes/com/acme/cust/Widget$1.class']);
+    expect(await readFile(join(dir, 'src/moca-java/entries/cust/build-classes.md'), 'utf8')).toContain('`Widget$1`');
+  });
+
+  describe('refuses, writing nothing at all, when a Java write target is a link', () => {
+    /** Every non-folder under src/ (links are listed, never followed): only the link the test made may be there. */
+    const onlyLinkLeft = async (dir: string, link: string) => {
+      const found: string[] = [];
+      const walk = async (folder: string, prefix: string): Promise<void> => {
+        for (const entry of await readdir(folder, { withFileTypes: true })) {
+          if (entry.isDirectory()) await walk(join(folder, entry.name), `${prefix}${entry.name}/`);
+          else found.push(`${prefix}${entry.name}`);
+        }
+      };
+      await walk(join(dir, 'src'), 'src/');
+      expect(found).toEqual([link]);
+    };
+
+    it.skipIf(!canLink)('manifest.json', async () => {
+      const dir = await tempDir();
+      const outside = join(await tempDir(), 'outside.json');
+      await writeFile(outside, 'outside');
+      await mkdir(join(dir, 'src/moca-java'), { recursive: true });
+      const link = join(dir, 'src/moca-java/manifest.json');
+      await makeLink(outside, link, 'file');
+      await expect(
+        runGenerate({ schema: false, java: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } }),
+      ).rejects.toThrow(`refusing to write into ${link}: it is not a regular file`);
+      expect(await readFile(outside, 'utf8')).toBe('outside');
+      await onlyLinkLeft(dir, 'src/moca-java/manifest.json');
+    });
+
+    it.skipIf(!canLink)('a JAR whose link points at a missing file', async () => {
+      const dir = await tempDir();
+      const outside = join(await tempDir(), 'created.jar');
+      await mkdir(join(dir, 'src/moca-java/jars/cust/lib'), { recursive: true });
+      const link = join(dir, 'src/moca-java/jars/cust/lib/acme-cust.jar');
+      await makeLink(outside, link, 'file');
+      await expect(
+        runGenerate({ schema: false, java: true, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } }),
+      ).rejects.toThrow(`refusing to write into ${link}: it is not a regular file`);
+      expect(await exists(outside)).toBe(false);
+      await onlyLinkLeft(dir, 'src/moca-java/jars/cust/lib/acme-cust.jar');
+    });
+
+    it.skipIf(!canLink)('a src/<component> folder', async () => {
+      const dir = await tempDir();
+      const outside = await tempDir();
+      await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify(decompilerConfig));
+      await mkdir(join(dir, 'src/moca-java/src'), { recursive: true });
+      const link = join(dir, 'src/moca-java/src/cust');
+      await makeLink(outside, link, 'dir');
+      await expect(
+        runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } }),
+      ).rejects.toThrow(`refusing to write into ${link}: it is not a folder`);
+      expect(await readdir(outside)).toEqual([]);
+      await onlyLinkLeft(dir, 'src/moca-java/src/cust');
+    });
+  });
+
+  it('fails, writing nothing, when the decompiler cannot be started', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ java: { decompiler: { command: 'mocakit-no-such-decompiler', args: ['{input}'] } } }));
+    await expect(
+      runGenerate({ schema: false, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } }),
+    ).rejects.toThrow('decompiler command "mocakit-no-such-decompiler" could not be started');
+    expect(await exists(join(dir, 'src/moca-java'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca.commands.json'))).toBe(false);
+  });
+
+  it('writes and deletes nothing on --dry-run', async () => {
+    const dir = await tempDir();
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: false, java: true, dryRun: true, cwd: dir, env, io: cliIo, deps: { transport: javaServer().transport } });
+    expect(out).toContain(`Would write Java inventory to ${join(dir, 'src/moca-java')}`);
+    expect(await exists(join(dir, 'src/moca-java'))).toBe(false);
+  });
+
+  it('--from-snapshot errors without the folder, and otherwise rebuilds the docs without any server call', async () => {
+    const dir = await tempDir();
+    const java = join(dir, 'src/moca-java');
+    await expect(
+      runGenerate({ java: true, fromSnapshot: fixture, out: 'src/moca.generated.ts', dryRun: false, cwd: dir, env: {}, io: io().io }),
+    ).rejects.toThrow(`Java introspection is enabled but ${java} does not exist; run generate against a server first, or pass --no-java`);
+
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify(decompilerConfig));
+    await runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } });
+    const before = await filesUnder(java);
+    await rm(join(java, 'INDEX.md'));
+    await rm(join(java, 'entries'), { recursive: true });
+
+    const { io: cliIo, out } = io();
+    await runGenerate({ fromSnapshot: 'src/moca.commands.json', dryRun: false, cwd: dir, env: {}, io: cliIo });
+    expect(out).toContain(`Wrote Java inventory to ${java}`);
+    expect(out).toContain('Decompiled 0 entries (1 skipped: libraries)');
+    expect(out.some((l) => l.startsWith('Read classpath') || l.startsWith('Downloaded'))).toBe(false);
+    expect(await filesUnder(java)).toEqual(before);
+  });
+
+  it('is off by default: no OS commands and no Java logs', async () => {
+    const dir = await tempDir();
+    const server = javaServer();
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: dir, env, io: cliIo, deps: { transport: server.transport } });
+    expect(server.requests.some(isOsCommand)).toBe(false);
+    expect(out.filter((l) => /Java|classpath|Decompiled|Downloaded/.test(l))).toEqual([]);
+    expect(await exists(join(dir, 'src/moca-java'))).toBe(false);
+    expect(await readFile(join(dir, 'src/moca-commands/commands/move-widget.md'), 'utf8')).not.toContain('Implemented in');
+  });
+
+  it('--no-java overrides the config', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ java: true }));
+    const server = javaServer();
+    await runGenerate({ schema: false, java: false, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: server.transport } });
+    expect(server.requests.some(isOsCommand)).toBe(false);
+  });
+
+  it('refuses before writing anything when moca-java holds a hand-written docs file', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'src/moca-java'), { recursive: true });
+    await writeFile(join(dir, 'src/moca-java/README.md'), '# mine\n');
+    await expect(
+      runGenerate({ schema: false, java: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: javaServer().transport } }),
+    ).rejects.toThrow(/was not generated by mocakit; move it or choose another java.dir directory/);
+    expect(await exists(join(dir, 'src/moca-java/manifest.json'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca.commands.json'))).toBe(false);
+  });
+});
+
+describe('runGenerate with agent context', () => {
+  const guide = '# Acme Guide\n\n## Setup\n\nInstall it.\n\n## Usage\n\nUse it.\n';
+
+  it('is off by default: no context logs and no moca-context folder', async () => {
+    const dir = await tempDir();
+    const { io: cliIo, out, err } = io();
+    await runGenerate({ schema: false, fromSnapshot: fixture, dryRun: false, cwd: dir, env: {}, io: cliIo });
+    expect(out).toEqual([`Wrote 10 commands to ${join(dir, 'src/moca.generated.ts')}`]);
+    expect(err.some((l) => /context|documents/.test(l))).toBe(false);
+    expect(await exists(join(dir, 'src/moca-context'))).toBe(false);
+  });
+
+  it('--context converts the sources next to the other output, without a server', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'src/moca-context/sources'), { recursive: true });
+    await writeFile(join(dir, 'src/moca-context/sources/guide.md'), guide);
+    const { io: cliIo, out } = io();
+    await runGenerate({ schema: false, context: true, fromSnapshot: fixture, dryRun: false, cwd: dir, env: {}, io: cliIo });
+    expect(out).toEqual([
+      'Converted 1 documents (2 sections, 0 unchanged)',
+      `Wrote 10 commands to ${join(dir, 'src/moca.generated.ts')}`,
+      `Wrote agent context to ${join(dir, 'src/moca-context')}`,
+    ]);
+    expect(await readFile(join(dir, 'src/moca-context/docs/guide/02-usage.md'), 'utf8')).toContain('Use it.');
+  });
+
+  it('runs when the config enables it, and --no-context overrides the config', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ context: { dir: 'ctx' } }));
+    await runGenerate({ context: false, fromSnapshot: fixture, dryRun: false, cwd: dir, env: {}, io: io().io });
+    expect(await exists(join(dir, 'ctx'))).toBe(false);
+    const { io: cliIo, out } = io();
+    await runGenerate({ fromSnapshot: fixture, dryRun: false, cwd: dir, env: {}, io: cliIo });
+    expect(out).toContain(`Put documents to convert in ${join(dir, 'ctx/sources')}`);
+    expect(await exists(join(dir, 'ctx/sources'))).toBe(true);
+  });
+
+  it('refuses before writing anything when moca-context holds a hand-written section file', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'src/moca-context/sources'), { recursive: true });
+    await mkdir(join(dir, 'src/moca-context/docs/guide'), { recursive: true });
+    await writeFile(join(dir, 'src/moca-context/sources/guide.md'), guide);
+    await writeFile(join(dir, 'src/moca-context/docs/guide/01-setup.md'), 'mine\n');
+    await expect(
+      runGenerate({ context: true, fromSnapshot: fixture, dryRun: false, cwd: dir, env: {}, io: io().io }),
+    ).rejects.toThrow(/was not generated by mocakit; move it or choose another context.dir directory/);
+    expect(await exists(join(dir, 'src/moca.generated.ts'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca-context/INDEX.md'))).toBe(false);
+  });
+
+  it('writes nothing for the context on --dry-run', async () => {
+    const dir = await tempDir();
+    const { io: cliIo, out } = io();
+    await runGenerate({ context: true, fromSnapshot: fixture, dryRun: true, cwd: dir, env: {}, io: cliIo });
+    expect(out).toContain(`Would write agent context to ${join(dir, 'src/moca-context')}`);
+    expect(await exists(join(dir, 'src'))).toBe(false);
   });
 });

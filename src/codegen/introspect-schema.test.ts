@@ -115,6 +115,7 @@ describe('introspectSchema', () => {
     await expect(result).rejects.toThrow(
       /^Schema introspection failed \(MOCA status 511\): .*permission denied.*read access to the database catalog.*--no-schema/s,
     );
+    await expect(result).rejects.toThrow(/\. Set schema: false in the config \(or pass --no-schema\) to skip it\.$/);
   });
 
   it('fails when the login schema has no tables', async () => {

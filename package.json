@@ -1,7 +1,7 @@
 {
   "name": "mocakit",
-  "version": "0.5.0",
-  "description": "Typed TypeScript SDK and code generator for MOCA (Blue Yonder / RedPrairie WMS)",
+  "version": "0.6.0",
+  "description": "Agentic development toolkit for MOCA (Blue Yonder / RedPrairie WMS): typed SDK, code generator and offline agent context",
   "keywords": [
     "moca",
     "blue-yonder",
@@ -10,7 +10,10 @@
     "jda",
     "sdk",
     "typescript",
-    "codegen"
+    "codegen",
+    "ai",
+    "agents",
+    "agentic"
   ],
   "author": "Nicholas Saway (https://github.com/rnsaway)",
   "homepage": "https://github.com/rnsaway/mocakit#readme",

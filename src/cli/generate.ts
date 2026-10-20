@@ -1,5 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { MocaClient, type MocaClientDeps } from '../client/client.js';
 import type { MocakitConfig, SchemaConfig } from '../define-config.js';
@@ -10,11 +10,15 @@ import { emitApi, filterOperations } from '../codegen/emit-api.js';
 import { emitApiDocs } from '../codegen/emit-api-docs.js';
 import { httpRestTransport } from '../transport/rest.js';
 import { checkDocsTargets, writeDocs } from '../codegen/docs-writer.js';
-import { readCodes, readTriggers, type TriggerInfo } from '../codegen/introspect-agent.js';
+import { readCodes, readCommandDefinitions, readTriggers, type CommandInfo, type TriggerInfo } from '../codegen/introspect-agent.js';
+import { commandDocFile } from '../codegen/emit-command-docs.js';
+import { commandKey } from '../codegen/names.js';
+import type { JavaManifest } from '../java/manifest.js';
+import { osExecFor, readJavaServer, type JavaServerRead } from '../java/server-reader.js';
 import { emit } from '../codegen/emit.js';
 import { emitSchema, filterTables, type SchemaFilter } from '../codegen/emit-schema.js';
 import { checkSchemaDocsTargets, emitSchemaDocs, writeSchemaDocs } from '../codegen/emit-schema-docs.js';
-import { introspectSchema } from '../codegen/introspect-schema.js';
+import { introspectSchema, isSchemaCatalogError, schemaSkipReason } from '../codegen/introspect-schema.js';
 import { readSchemaSnapshot, sameSchema, writeSchemaSnapshot, type SchemaSnapshot } from '../codegen/schema-snapshot.js';
 import { filterCommands } from '../codegen/filter.js';
 import { introspect, type IntrospectResult } from '../codegen/introspect.js';
@@ -28,11 +32,14 @@ import {
   documentedCommands,
   emitDocumentedCommands,
   readDocumentedCommands,
+  relativeHref,
   resolveCodesSettings,
   resolveCommandDocsSettings,
 } from './command-docs.js';
 import { apiDocsManagedDirs, readApiSnapshotFile, resolveApiSettings } from './api-step.js';
+import { buildJavaOutput, checkJavaTargets, loadPreviousJava, requirePreviousJava, resolveJavaSettings, writeJavaOutput, type JavaOutput } from './java-step.js';
 import { loadConfig, resolveConnection } from './load-config.js';
+import { checkContextTargets, logContextSummary, prepareContext, resolveContextSettings, writeContext, type PreparedContext } from '../context/context-step.js';
 
 export interface CliIo {
   log(message: string): void;
@@ -49,6 +56,10 @@ export interface GenerateOptions {
   commandDocs?: boolean;
   /** `true` = --api, `false` = --no-api, `undefined` = the config decides. */
   api?: boolean;
+  /** `true` = --java, `false` = --no-java, `undefined` = the config decides. */
+  java?: boolean;
+  /** `true` = --context, `false` = --no-context, `undefined` = the config decides. */
+  context?: boolean;
   dryRun: boolean;
   /** Print every warning instead of the first `MAX_PRINTED_WARNINGS` and a count. */
   verbose?: boolean;
@@ -58,13 +69,19 @@ export interface GenerateOptions {
   deps?: MocaClientDeps;
 }
 
-const DEFAULT_OUT = 'src/moca.generated.ts';
+export const DEFAULT_OUT = 'src/moca.generated.ts';
 
 /** How many individual warnings the CLI prints; the rest are summarized in one line. */
 const MAX_PRINTED_WARNINGS = 50;
 
-/** Prints warnings up to `limit` across all calls to `print`; `finish` reports the rest. */
-function warningPrinter(io: CliIo, limit: number): { print(warnings: readonly string[]): void; finish(): void } {
+/**
+ * Prints warnings up to `limit` across all calls to `print`; `finish` reports the rest. `always`
+ * prints a warning that must never be hidden, without counting it toward the limit.
+ */
+function warningPrinter(
+  io: CliIo,
+  limit: number,
+): { print(warnings: readonly string[]): void; always(warning: string): void; finish(): void } {
   let printed = 0;
   let suppressed = 0;
   return {
@@ -77,6 +94,9 @@ function warningPrinter(io: CliIo, limit: number): { print(warnings: readonly st
           suppressed++;
         }
       }
+    },
+    always(warning) {
+      io.error(`warning: ${warning}`);
     },
     finish() {
       if (suppressed > 0) io.error(`... and ${suppressed} more warnings (use --verbose to see all)`);
@@ -100,9 +120,11 @@ export interface ResolvedSchema {
   /** `null` when docs are disabled. */
   docs: string | null;
   filter: SchemaFilter;
+  /** True when enabled by `--schema` or the config; false when on only by default. */
+  explicit: boolean;
 }
 
-/** Schema settings from config + CLI flag, or `null` when schema introspection is off. */
+/** Schema settings from config + CLI flag, or `null` when schema introspection is off. On by default. */
 export function resolveSchemaSettings(
   config: MocakitConfig,
   flag: boolean | undefined,
@@ -113,7 +135,7 @@ export function resolveSchemaSettings(
   if (setting !== undefined && typeof setting !== 'boolean' && (typeof setting !== 'object' || setting === null || Array.isArray(setting))) {
     throw new Error('config.schema must be true, false or an object');
   }
-  if (flag === false || (flag === undefined && !setting)) return null;
+  if (flag === false || (flag === undefined && setting === false)) return null;
   const options: SchemaConfig = typeof setting === 'object' ? setting : {};
   const near = (file: string) => resolve(dirname(out), file);
   const fromConfig = (path: string) => resolve(configDir, path);
@@ -122,6 +144,7 @@ export function resolveSchemaSettings(
     out: options.out !== undefined ? fromConfig(options.out) : near('moca.schema.ts'),
     docs: options.docs === false ? null : options.docs !== undefined ? fromConfig(options.docs) : near('moca-schema'),
     filter: { include: options.include, exclude: options.exclude, views: options.views },
+    explicit: flag === true || setting !== undefined,
   };
 }
 
@@ -129,6 +152,15 @@ export function resolveSchemaSettings(
 export function moduleSpecifier(fromFile: string, toFile: string): string {
   const path = relative(dirname(fromFile), toFile).split(sep).join('/').replace(/\.(m?)ts$/, '.$1js');
   return path.startsWith('.') ? path : `./${path}`;
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readSchemaFile(path: string): Promise<SchemaSnapshot> {
@@ -157,23 +189,20 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   const out = options.out !== undefined ? resolve(cwd, options.out) : resolve(configDir, config.out ?? DEFAULT_OUT);
   const snapshotPath =
     config.snapshot !== undefined ? resolve(configDir, config.snapshot) : resolve(dirname(out), 'moca.commands.json');
-  const schema = resolveSchemaSettings(config, options.schema, configDir, out);
+  let schema = resolveSchemaSettings(config, options.schema, configDir, out);
+  // On only by default: a snapshot run without a schema snapshot skips schema instead of failing.
+  if (schema !== null && !schema.explicit && options.fromSnapshot !== undefined && !(await fileExists(schema.snapshot))) {
+    io.log(`Skipped schema: ${schema.snapshot} does not exist (--from-snapshot)`);
+    schema = null;
+  }
   const commandDocs = resolveCommandDocsSettings(config, options.commandDocs, configDir, out);
   const codesSettings = resolveCodesSettings(config, schema !== null);
   const api = resolveApiSettings(config, options.api, configDir, out);
+  const java = resolveJavaSettings(config, options.java, configDir, out);
+  const contextSettings = resolveContextSettings(config, options.context, configDir, out);
 
-  if (!options.dryRun) {
-    // Fail fast, before contacting the server, if an output directory can't be created.
-    try {
-      await mkdir(dirname(out), { recursive: true });
-    } catch (error) {
-      throw new Error(`Cannot write ${out}: ${errorDetail(error)}`);
-    }
-    const dirs = [
-      ...(schema === null ? [] : [dirname(schema.snapshot), dirname(schema.out), ...(schema.docs === null ? [] : [schema.docs])]),
-      ...(commandDocs !== null && options.fromSnapshot === undefined ? [commandDocs.out] : []),
-      ...(api === null ? [] : [dirname(api.snapshot), dirname(api.out), ...(api.docs === null ? [] : [api.docs])]),
-    ];
+  const schemaDirs = (s: ResolvedSchema): string[] => [dirname(s.snapshot), dirname(s.out), ...(s.docs === null ? [] : [s.docs])];
+  const makeDirs = async (dirs: readonly string[]): Promise<void> => {
     for (const dir of dirs) {
       try {
         await mkdir(dir, { recursive: true });
@@ -181,12 +210,31 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
         throw new Error(`Cannot write ${dir}: ${errorDetail(error)}`);
       }
     }
+  };
+  // Schema on only by default may still be skipped after a live catalog failure, so its folders
+  // are created only once the catalog was read (a skipped run then writes what `schema: false` writes).
+  const deferSchemaDirs = schema !== null && !schema.explicit && options.fromSnapshot === undefined;
+  if (!options.dryRun) {
+    // Fail fast, before contacting the server, if an output directory can't be created.
+    try {
+      await mkdir(dirname(out), { recursive: true });
+    } catch (error) {
+      throw new Error(`Cannot write ${out}: ${errorDetail(error)}`);
+    }
+    await makeDirs([
+      ...(schema === null || deferSchemaDirs ? [] : schemaDirs(schema)),
+      ...(commandDocs !== null && options.fromSnapshot === undefined ? [commandDocs.out] : []),
+      ...(api === null ? [] : [dirname(api.snapshot), dirname(api.out), ...(api.docs === null ? [] : [api.docs])]),
+    ]);
   }
 
   let snapshot: Snapshot;
   let schemaSnapshot: SchemaSnapshot | null = null;
   let commandRows: IntrospectResult['commandRows'];
   let triggers: TriggerInfo[] = [];
+  let javaPrevious: JavaManifest | null = null;
+  let javaCache = new Map<string, Uint8Array>();
+  let javaRead: JavaServerRead | null = null;
   if (options.fromSnapshot !== undefined) {
     const snapshotFile = resolve(cwd, options.fromSnapshot);
     try {
@@ -202,26 +250,47 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     }
     if (schema !== null) schemaSnapshot = await readSchemaFile(schema.snapshot);
     if (commandDocs !== null) io.log('Skipped command docs: they need a live server (--from-snapshot)');
+    if (java !== null) ({ previous: javaPrevious, cache: javaCache } = await requirePreviousJava(java.dir));
   } else {
     const connection = resolveConnection(config, env);
+    // Files already stored locally (and still matching their checksum) are not downloaded again.
+    if (java !== null) ({ previous: javaPrevious, cache: javaCache } = await loadPreviousJava(java.dir));
     io.log(`Introspecting ${redactUrl(connection.url)} …`);
     const client = new MocaClient({ ...connection, session: { reuse: false } }, options.deps);
     let introspected: Awaited<ReturnType<typeof introspect>>;
     let schemaResult: Awaited<ReturnType<typeof introspectSchema>> | null = null;
     let codesResult: Awaited<ReturnType<typeof readCodes>> | null = null;
+    let schemaSkipped: string | null = null;
     try {
-      introspected = await introspect(client, { version: VERSION, server: connection.url, keepCommandRows: commandDocs !== null });
-      if (schema !== null) schemaResult = await introspectSchema(client, { version: VERSION, server: connection.url });
+      introspected = await introspect(client, { version: VERSION, server: connection.url, keepCommandRows: commandDocs !== null || java !== null });
+      if (schema !== null) {
+        try {
+          schemaResult = await introspectSchema(client, { version: VERSION, server: connection.url });
+        } catch (error) {
+          // On only by default: a catalog the login can't read skips schema instead of failing the run;
+          // connection, login and protocol errors still fail it.
+          if (schema.explicit || !isSchemaCatalogError(error)) throw error;
+          schemaSkipped = `Skipped schema: ${schemaSkipReason(error)}; set schema: false to silence this`;
+          schema = null;
+        }
+      }
       if (codesSettings !== null) {
         codesResult = await readCodes(client, codesSettings.locale ?? client.session.locale ?? 'US_ENGLISH');
       }
       if (commandDocs !== null && commandDocs.triggers) triggers = await readTriggers(client);
+      if (java !== null) {
+        const cache = javaCache;
+        javaRead = await readJavaServer(osExecFor(client), { roots: java.roots, maxFileSize: java.maxFileSize, cached: (sha) => cache.has(sha) });
+      }
     } finally {
       await client.logout().catch(() => undefined);
     }
     snapshot = introspected.snapshot;
     commandRows = introspected.commandRows;
+    if (schema !== null && deferSchemaDirs && !options.dryRun) await makeDirs(schemaDirs(schema));
     warn.print(introspected.warnings);
+    // The only sign that schema stopped, so it is never hidden by the warning cap.
+    if (schemaSkipped !== null) warn.always(schemaSkipped);
     if (schemaResult !== null) {
       schemaSnapshot = schemaResult.snapshot;
       warn.print(schemaResult.warnings);
@@ -271,6 +340,44 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     }
   }
 
+  let javaOutput: JavaOutput | null = null;
+  if (java !== null) {
+    if (javaRead !== null) warn.print(javaRead.warnings);
+    const commands: CommandInfo[] | null = commandRows !== undefined ? readCommandDefinitions(commandRows) : null;
+    // Entry pages link to this run's command docs or, when none are emitted this run, to those in a
+    // previously generated command INDEX.md.
+    const commandsOut = commandDocs?.out ?? commandDocsDir(config, configDir, out);
+    const documentedNames =
+      commandModels !== null ? commandModels.map((m) => m.info.name) : [...((await readDocumentedCommands(commandsOut)) ?? [])];
+    const documented = new Set(documentedNames.map((name) => commandKey(name)));
+    javaOutput = await buildJavaOutput(javaRead, javaPrevious, java, {
+      version: VERSION,
+      server: snapshot.server,
+      dir: java.dir,
+      cache: javaCache,
+      commands,
+      commandHref: (key) =>
+        documented.has(key) ? relativeHref(join(java.dir, 'entries', '_'), join(commandsOut, 'commands', commandDocFile(key).file)) : undefined,
+    });
+    warn.print(javaOutput.warnings);
+    const { stats } = javaOutput;
+    const mb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
+    if (javaRead !== null) {
+      io.log(`Read classpath: ${stats.entries} entries (${stats.selected} selected, ${stats.files} files, ${mb(stats.bytes)} MB)`);
+      io.log(`Downloaded ${stats.downloaded} files (${mb(stats.downloadedBytes)} MB, ${stats.unchanged} unchanged)`);
+    }
+    if (java.decompiler === null) io.log('No decompiler configured; skipped Java source');
+    else io.log(`Decompiled ${stats.decompiled} entries (${stats.skippedLibraries} skipped: libraries)`);
+  }
+
+  // Agent context from local documents; never touches the server.
+  let context: PreparedContext | null = null;
+  if (contextSettings !== null) {
+    context = await prepareContext(contextSettings, VERSION);
+    warn.print(context.output.warnings);
+    logContextSummary(context, io);
+  }
+
   // Keep the previous usage when this run did not compute it (command docs off), so the table
   // docs' "Used by" sections survive. Code values are never carried over.
   const existingSchema = schema !== null && schemaSnapshot !== null ? await readSchemaSnapshot(schema.snapshot).catch(() => null) : null;
@@ -316,6 +423,7 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       server: snapshot.server,
       schemaDocs: schema?.docs ?? null,
       documentedTables,
+      ...(java !== null && javaOutput !== null ? { java: { links: javaOutput.links, dir: java.dir } } : {}),
     });
     warn.print(emitted.warnings);
     commandDocsFiles = emitted.files;
@@ -345,6 +453,11 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   if (!options.dryRun && api !== null && api.docs !== null && apiOutput?.docs) {
     await checkDocsTargets(api.docs, apiOutput.docs, 'api.docs');
   }
+  if (!options.dryRun && java !== null && javaOutput !== null) {
+    await checkJavaTargets(java, javaOutput, javaPrevious);
+    if (javaOutput.docs) await checkDocsTargets(java.dir, javaOutput.docs, 'java.dir');
+  }
+  if (!options.dryRun && context !== null) await checkContextTargets(context);
 
   if (options.fromSnapshot === undefined) {
     // Everything was read; only now write. Leave an existing snapshot byte-for-byte alone when
@@ -445,4 +558,12 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
       io.log(`${verb} ${apiOutput.count} API docs to ${api.docs}`);
     }
   }
+
+  if (java !== null && javaOutput !== null) {
+    const result = await writeJavaOutput(java, javaOutput, javaPrevious, options.dryRun);
+    io.log(`${verb} Java inventory to ${java.dir}`);
+    if (!options.dryRun && result.removed > 0) io.log(`Removed ${result.removed} stale Java files`);
+  }
+
+  if (context !== null) await writeContext(context, io, options.dryRun);
 }

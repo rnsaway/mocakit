@@ -1,4 +1,6 @@
-/** Opt-in database schema introspection (tables, views, columns). */
+import type { ConverterConfig } from './context/convert-external.js';
+
+/** Database schema introspection (tables, views, columns). On by default; `schema: false` turns it off. */
 export interface SchemaConfig {
   /** Table/view name globs (`*`, `?`), case-insensitive. Default `['*']`. */
   include?: string[];
@@ -55,6 +57,58 @@ export interface ApiConfig {
   docs?: string | false;
 }
 
+/** A Java decompiler installed locally (e.g. CFR or Vineflower); run without a shell. */
+export interface DecompilerConfig {
+  command: string;
+  /** May contain `{input}` (a JAR file or a classes folder) and `{output}` (an empty folder). */
+  args: string[];
+  /** Per input. Default 120000. */
+  timeoutMs?: number;
+}
+
+/**
+ * Opt-in Java introspection (moca-java/): the server's classpath read with `execute os command`,
+ * the selected JARs and classes downloaded and verified, and optionally decompiled.
+ */
+export interface JavaConfig {
+  /**
+   * Classpath roots to download: `$LESDIR`, `$NAME` (a server environment variable that holds a folder),
+   * the name of a folder next to `$LESDIR`, or an absolute path. Default `['$LESDIR']`.
+   */
+  roots?: string[];
+  /** File-name globs always treated as custom code. */
+  custom?: string[];
+  /** File-name globs always treated as libraries (wins over `custom`). */
+  libraries?: string[];
+  /** Output folder. Default `moca-java` next to `out`. */
+  dir?: string;
+  /** Agent docs (README.md, INDEX.md, entries/). Default true. */
+  docs?: boolean;
+  /** Files larger than this many bytes are skipped. Default 25 MiB. */
+  maxFileSize?: number;
+  /** A locally installed decompiler; `args` may use `{input}` and `{output}`. Without it no source is produced. */
+  decompiler?: DecompilerConfig;
+  /** Also decompile libraries. Default false (custom code only). */
+  decompileLibraries?: boolean;
+}
+
+/**
+ * Opt-in agent context (moca-context/): documents in `sources/` converted to Markdown, split by
+ * section and indexed. Converted locally; nothing is sent to the server.
+ */
+export interface ContextConfig {
+  /** Output folder. Default `moca-context` next to `out`. */
+  dir?: string;
+  /** Folder of documents to convert. Default `<dir>/sources`. */
+  sources?: string;
+  /** Converter commands by lowercase extension with the dot (e.g. `.pdf`); `args` may use `{input}` and `{output}`. */
+  converters?: Record<string, ConverterConfig>;
+  /** Globs (paths relative to `sources`) of documents your coding agent converts; listed in PENDING.md. */
+  agent?: string[];
+  /** Sections larger than this many bytes are split again. Default 61440. */
+  maxSectionBytes?: number;
+}
+
 export interface MocakitConfig {
   /** Falls back to the MOCA_URL environment variable. */
   url?: string;
@@ -76,12 +130,16 @@ export interface MocakitConfig {
   exclude?: string[];
   /** Component-level allowlist, case-insensitive. */
   levels?: string[];
-  /** `true` or an object enables schema introspection; see `SchemaConfig`. Default off. */
+  /** Schema introspection; see `SchemaConfig`. Default on; `false` turns it off. */
   schema?: boolean | SchemaConfig;
   /** `true` or an object enables command docs (moca-commands/); see `CommandDocsConfig`. Default off. */
   commandDocs?: boolean | CommandDocsConfig;
   /** `true` or an object enables the REST API client; see `ApiConfig`. Default off. */
   api?: boolean | ApiConfig;
+  /** `true` or an object enables Java introspection (moca-java/); see `JavaConfig`. Default off. */
+  java?: boolean | JavaConfig;
+  /** `true` or an object enables agent context from documents (moca-context/); see `ContextConfig`. Default off. */
+  context?: boolean | ContextConfig;
 }
 
 export function defineConfig(config: MocakitConfig): MocakitConfig {

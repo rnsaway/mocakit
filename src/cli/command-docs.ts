@@ -9,6 +9,7 @@ import { readCommandDefinitions, type TriggerInfo } from '../codegen/introspect-
 import { commandKey } from '../codegen/names.js';
 import type { Snapshot } from '../codegen/snapshot.js';
 import type { CommandDocsConfig, MocakitConfig } from '../define-config.js';
+import type { JavaLink } from '../java/inventory.js';
 import type { MocaRow } from '../types.js';
 
 export interface ResolvedCommandDocs {
@@ -141,7 +142,14 @@ export async function readDocumentedCommands(dir: string): Promise<Set<string> |
 export function emitDocumentedCommands(
   documented: CommandModel[],
   settings: ResolvedCommandDocs,
-  options: { version: string; server: string; schemaDocs: string | null; documentedTables: ReadonlySet<string> },
+  options: {
+    version: string;
+    server: string;
+    schemaDocs: string | null;
+    documentedTables: ReadonlySet<string>;
+    /** Java links by command key, and the moca-java folder; only when Java introspection is on. */
+    java?: { links: ReadonlyMap<string, JavaLink>; dir: string };
+  },
 ): { files: Map<string, string>; warnings: string[] } {
   const { schemaDocs, documentedTables } = options;
   const tableHref =
@@ -161,6 +169,9 @@ export function emitDocumentedCommands(
       customTriggers: settings.customTriggers,
       triggers: settings.triggers,
       tableHref,
+      ...(options.java !== undefined
+        ? { javaLink: (key: string) => options.java!.links.get(key), javaDirFromCommands: relativeHref(join(settings.out, 'commands'), options.java.dir) }
+        : {}),
     },
   );
 }

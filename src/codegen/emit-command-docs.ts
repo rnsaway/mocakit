@@ -4,6 +4,8 @@ import type { CommandModel, TriggerModel } from './agent-model.js';
 import { docHref, DOC_MARKER, encodeDocName, PRIVATE_NOTICE } from './docs-writer.js';
 import { globToRegExp } from './filter.js';
 import type { CommandDefinition } from './introspect-agent.js';
+import { codeSpan } from './emit-java-docs.js';
+import type { JavaLink } from '../java/inventory.js';
 
 export interface CommandDocsOptions {
   version: string;
@@ -17,6 +19,14 @@ export interface CommandDocsOptions {
    * plain name). The option itself is undefined when schema docs are off.
    */
   tableHref?: (table: string) => string | undefined;
+  /** The Java class link of a command (by key), or undefined; adds one line under the `Java:` line of the Implementation section. */
+  javaLink?: (commandKey: string) => JavaLink | undefined;
+  /**
+   * Relative path from the command docs folder to the `moca-java` folder, e.g. `../../moca-java` when
+   * commands docs are at `moca-commands/` and Java docs are at `moca-java/`. Used for the `source:` href; required
+   * for source links, which are omitted without it.
+   */
+  javaDirFromCommands?: string;
 }
 
 const SAFE = /^[a-z0-9_$#.]$/;
@@ -41,6 +51,21 @@ function fence(source: string): string {
 function capped(items: string[], render: (item: string) => string): string {
   const shown = items.slice(0, CAP).map(render).join(', ');
   return items.length > CAP ? `${shown}, and ${items.length - CAP} more` : shown;
+}
+
+/** Href from `commands/<file>.md` to a file under the moca-java folder (`source` is relative to it). */
+function javaSourceHref(prefix: string, source: string): string {
+  return [...prefix.split('/'), ...source.split('/')]
+    .map((seg) => (seg === '' || seg === '.' || seg === '..' ? seg : encodeURIComponent(seg)))
+    .join('/');
+}
+
+function javaLinkLine(link: JavaLink, javaDir: string | undefined): string {
+  if (link.kind === 'unknown' || link.entry === '') return 'Class not found on the classpath';
+  if (!link.downloaded) return `Provided by ${codeSpan(link.entry)} (not downloaded)`;
+  const head = `Implemented in ${codeSpan(link.entry)} (${link.kind})`;
+  if (link.source === undefined || javaDir === undefined) return head;
+  return `${head} — source: [${codeSpan(link.source)}](${javaSourceHref(javaDir, link.source)})`;
 }
 
 function implementation(def: CommandDefinition): string[] {
@@ -127,8 +152,11 @@ export function emitCommandDocs(commands: CommandModel[], options: CommandDocsOp
       for (const a of m.args) lines.push(`| ${cell(a.name)} | ${cell(a.dtype)} | ${a.required ? 'yes' : 'no'} | ${cell(a.description)} |`);
       lines.push('');
     }
-    lines.push('## Implementation', '', ...implementation(active));
-    if (implementation(active).length > 0) lines.push('');
+    const impl = implementation(active);
+    const link = options.javaLink?.(m.info.key);
+    if (link !== undefined && impl.length > 0 && impl[0].startsWith('Java:')) impl.push('', javaLinkLine(link, options.javaDirFromCommands));
+    lines.push('## Implementation', '', ...impl);
+    if (impl.length > 0) lines.push('');
     lines.push(...sourceBlock(active));
 
     if (options.triggers && m.triggers.length > 0) {

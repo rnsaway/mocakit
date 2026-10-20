@@ -1,27 +1,40 @@
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { MocaClientDeps } from '../client/client.js';
+import { resolveContextSettings, runContext } from '../context/context-step.js';
+import { VERSION } from '../version.js';
 import { exposeOnProcessEnv, loadEnvFile } from './env-file.js';
-import { runGenerate, type CliIo } from './generate.js';
+import { DEFAULT_OUT, runGenerate, type CliIo } from './generate.js';
+import { loadConfig } from './load-config.js';
 
 const USAGE = [
-  'Usage: mocakit generate [--config <path>] [--out <path>] [--from-snapshot <path>] [--env-file <path> | --no-env-file] [--schema | --no-schema] [--command-docs | --no-command-docs] [--api | --no-api] [--dry-run] [--verbose]',
+  'Usage: mocakit generate [--config <path>] [--out <path>] [--from-snapshot <path>] [--env-file <path> | --no-env-file] [--schema | --no-schema] [--command-docs | --no-command-docs] [--api | --no-api] [--java | --no-java] [--context | --no-context] [--dry-run] [--verbose]',
+  'Usage: mocakit context [--config <path>] [--dry-run] [--verbose]',
   '',
   '  --config         Config file (default: mocakit.config.{ts,mts,mjs,js,json} in the current directory)',
   '  --out            Output file (default: config.out or src/moca.generated.ts)',
   '  --from-snapshot  Generate from a saved moca.commands.json without contacting the server',
   '  --env-file       Load environment variables from this file (default: ./.env in the current directory, if present)',
   '  --no-env-file    Do not load ./.env automatically',
-  '  --schema         Also introspect database tables/views (writes moca.schema.json, moca.schema.ts and moca-schema/)',
-  '  --no-schema      Skip schema introspection even if the config enables it',
+  '  --schema         Introspect database tables/views (the default; writes moca.schema.json, moca.schema.ts and moca-schema/)',
+  '  --no-schema      Skip schema introspection',
   '  --command-docs   Also write moca-commands/ (command docs with triggers and cross-references; source only for custom levels)',
   '  --no-command-docs',
   '                   Skip command docs even if the config enables them',
   '  --api            Also generate the typed REST API client (moca.api.json, moca.api.ts, moca-api/) from the server\'s Swagger specs',
   '  --no-api',
   '                   Skip the REST API client even if the config enables it',
+  '  --java           Also read the server\'s Java classpath with "execute os command" into moca-java/ (JARs, classes, inventory',
+  '                   docs; Java source when a decompiler is configured)',
+  '  --no-java',
+  '                   Skip Java introspection even if the config enables it',
+  '  --context        Also convert the documents in moca-context/sources/ into sectioned Markdown for agents (no server needed)',
+  '  --no-context',
+  '                   Skip the agent context even if the config enables it',
   '  --dry-run        Introspect and report without writing files',
   '  --verbose        Print every warning (by default only the first 50 are printed) and the names of loaded env variables',
+  '',
+  '`mocakit context` runs only the agent-context step; it needs no server and no credentials, and works without a config file.',
   '',
   'Credentials come from the config or MOCA_URL, MOCA_USER, MOCA_PASSWORD (and MOCA_IGNORE_SSL=1|yes|true).',
   'Variables already set in the environment take precedence over those in the env file.',
@@ -45,6 +58,7 @@ export async function runCli(
     io.log(USAGE);
     return 0;
   }
+  if (command === 'context') return runContextCommand(rest, io, cwd);
   if (command !== 'generate') {
     io.error(USAGE);
     return 1;
@@ -66,6 +80,10 @@ export async function runCli(
     'no-command-docs'?: boolean;
     api?: boolean;
     'no-api'?: boolean;
+    java?: boolean;
+    'no-java'?: boolean;
+    context?: boolean;
+    'no-context'?: boolean;
     'dry-run'?: boolean;
     verbose?: boolean;
   };
@@ -84,6 +102,10 @@ export async function runCli(
         'no-command-docs': { type: 'boolean' },
         api: { type: 'boolean' },
         'no-api': { type: 'boolean' },
+        java: { type: 'boolean' },
+        'no-java': { type: 'boolean' },
+        context: { type: 'boolean' },
+        'no-context': { type: 'boolean' },
         'dry-run': { type: 'boolean' },
         verbose: { type: 'boolean' },
       },
@@ -109,6 +131,14 @@ export async function runCli(
   }
   if (values.api && values['no-api']) {
     io.error('mocakit: --api and --no-api cannot be used together');
+    return 1;
+  }
+  if (values.java && values['no-java']) {
+    io.error('mocakit: --java and --no-java cannot be used together');
+    return 1;
+  }
+  if (values.context && values['no-context']) {
+    io.error('mocakit: --context and --no-context cannot be used together');
     return 1;
   }
   const verbose = values.verbose ?? false;
@@ -140,6 +170,8 @@ export async function runCli(
       schema: values.schema ? true : values['no-schema'] ? false : undefined,
       commandDocs: values['command-docs'] ? true : values['no-command-docs'] ? false : undefined,
       api: values.api ? true : values['no-api'] ? false : undefined,
+      java: values.java ? true : values['no-java'] ? false : undefined,
+      context: values.context ? true : values['no-context'] ? false : undefined,
       dryRun: values['dry-run'] ?? false,
       verbose,
       cwd,
@@ -153,5 +185,38 @@ export async function runCli(
     return 1;
   } finally {
     restoreProcessEnv();
+  }
+}
+
+/** `mocakit context`: the agent-context step alone. No server, no credentials; the config file is optional. */
+async function runContextCommand(args: string[], io: CliIo, cwd: string): Promise<number> {
+  if (args.includes('--help') || args.includes('-h')) {
+    io.log(USAGE);
+    return 0;
+  }
+  let values: { config?: string; 'dry-run'?: boolean; verbose?: boolean };
+  try {
+    ({ values } = parseArgs({
+      args,
+      options: { config: { type: 'string' }, 'dry-run': { type: 'boolean' }, verbose: { type: 'boolean' } },
+      strict: true,
+      allowPositionals: false,
+    }));
+  } catch (error) {
+    io.error(`mocakit: ${(error as Error).message}`);
+    io.error(USAGE);
+    return 1;
+  }
+  try {
+    const loaded = await loadConfig(values.config, cwd, { optional: true });
+    const config = loaded?.config ?? {};
+    const configDir = loaded !== null ? dirname(loaded.path) : cwd;
+    const out = resolve(configDir, config.out ?? DEFAULT_OUT);
+    const settings = resolveContextSettings(config, true, configDir, out)!;
+    await runContext(settings, io, { dryRun: values['dry-run'] ?? false, version: VERSION, verbose: values.verbose ?? false });
+    return 0;
+  } catch (error) {
+    io.error(`mocakit: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
   }
 }

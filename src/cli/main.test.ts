@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -125,7 +125,7 @@ describe('runCli .env loading', () => {
     await writeFile(join(dir, '.env'), DOTENV);
     const fake = fakeServer();
     const { io, out, err } = capture();
-    expect(await runCli(['generate', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
+    expect(await runCli(['generate', '--no-schema', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
     expect(out[0]).toBe(`Loaded 3 variables from ${join(dir, '.env')}`);
     expect(out.at(-1)).toBe(`Wrote 1 commands to ${join(dir, 'moca.ts')}`);
     expect(fake.requests[0]?.url).toMatch(/^https:\/\/file\.moca\.test\/service/);
@@ -142,7 +142,7 @@ describe('runCli .env loading', () => {
     vi.stubEnv('MOCA_USER', 'realuser');
     const fake = fakeServer();
     const { io } = capture();
-    expect(await runCli(['generate', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
+    expect(await runCli(['generate', '--no-schema', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
     expect(fake.requests[0]?.url).toMatch(/^https:\/\/real\.moca\.test\/service/);
     expect(fake.requests[0]?.query).toContain("usr_id = 'realuser'");
     expect(process.env.MOCA_USER).toBe('realuser');
@@ -174,7 +174,7 @@ describe('runCli .env loading', () => {
     const fake = fakeServer();
     const { io, out } = capture();
     expect(
-      await runCli(['generate', '--env-file', 'moca.local.env', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } }),
+      await runCli(['generate', '--no-schema', '--env-file', 'moca.local.env', '--out', 'moca.ts'], io, dir, { deps: { transport: fake.transport } }),
     ).toBe(0);
     expect(out[0]).toBe(`Loaded 3 variables from ${join(dir, 'moca.local.env')}`);
     expect(fake.requests[0]?.query).toContain("usr_id = 'fileuser'");
@@ -214,7 +214,7 @@ describe('runCli .env loading', () => {
     await writeFile(join(dir, '.env'), `${DOTENV}this line is garbage ${PASSWORD}-garbage\n`);
     const fake = fakeServer();
     const { io, out, err } = capture();
-    expect(await runCli(['generate', '--out', 'moca.ts', '--verbose'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
+    expect(await runCli(['generate', '--no-schema', '--out', 'moca.ts', '--verbose'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
     expect(out[0]).toBe(`Loaded 3 variables from ${join(dir, '.env')}: MOCA_PASSWORD, MOCA_URL, MOCA_USER`);
     const all = [...out, ...err].join('\n');
     expect(all).not.toContain(PASSWORD);
@@ -235,7 +235,7 @@ describe('runCli .env loading', () => {
     await writeFile(join(dir, '.env'), `﻿${DOTENV.replace(/\n/g, '\r\n')}`);
     const fake = fakeServer();
     const { io, out } = capture();
-    expect(await runCli(['generate', '--out', 'moca.ts', '--verbose'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
+    expect(await runCli(['generate', '--no-schema', '--out', 'moca.ts', '--verbose'], io, dir, { deps: { transport: fake.transport } })).toBe(0);
     expect(out[0]).toBe(`Loaded 3 variables from ${join(dir, '.env')}: MOCA_PASSWORD, MOCA_URL, MOCA_USER`);
     expect(fake.requests[0]?.url).toMatch(/^https:\/\/file\.moca\.test\/service/);
     expect(fake.requests[0]?.query).toBe(`login user where usr_id = 'fileuser' and usr_pswd = '${PASSWORD}'`);
@@ -302,5 +302,63 @@ describe('runCli .env loading', () => {
     const { io: cliIo, err } = capture();
     expect(await runCli(['generate', '--api', '--no-api'], cliIo, await tempDir())).toBe(1);
     expect(err).toContain('mocakit: --api and --no-api cannot be used together');
+  });
+
+  it('rejects --java together with --no-java', async () => {
+    const { io: cliIo, err } = capture();
+    expect(await runCli(['generate', '--java', '--no-java'], cliIo, await tempDir())).toBe(1);
+    expect(err).toContain('mocakit: --java and --no-java cannot be used together');
+  });
+
+  it('documents the Java flags', async () => {
+    const { io: cliIo, out } = capture();
+    await runCli(['--help'], cliIo);
+    expect(out.join('\n')).toContain('[--java | --no-java]');
+    expect(out.join('\n')).toContain('--no-java');
+  });
+
+  it('rejects --context together with --no-context', async () => {
+    const { io: cliIo, err } = capture();
+    expect(await runCli(['generate', '--context', '--no-context'], cliIo, await tempDir())).toBe(1);
+    expect(err).toContain('mocakit: --context and --no-context cannot be used together');
+  });
+
+  it('documents the context command and flags', async () => {
+    const { io: cliIo, out } = capture();
+    await runCli(['--help'], cliIo);
+    expect(out.join('\n')).toContain('[--context | --no-context]');
+    expect(out.join('\n')).toContain('Usage: mocakit context [--config <path>] [--dry-run] [--verbose]');
+  });
+
+  it('runs mocakit context without a config file or credentials', async () => {
+    const dir = await tempDir();
+    await mkdir(join(dir, 'src/moca-context/sources'), { recursive: true });
+    await writeFile(join(dir, 'src/moca-context/sources/guide.md'), '# Acme Guide\n\n## Setup\n\nInstall it.\n\n## Usage\n\nUse it.\n');
+    const { io: cliIo, out, err } = capture();
+    expect(await runCli(['context'], cliIo, dir)).toBe(0);
+    expect(err).toEqual([]);
+    expect(out).toEqual(['Converted 1 documents (2 sections, 0 unchanged)', `Wrote agent context to ${join(dir, 'src/moca-context')}`]);
+    expect(await readFile(join(dir, 'src/moca-context/docs/guide/01-setup.md'), 'utf8')).toContain('Install it.');
+  });
+
+  it('mocakit context uses the config file when given, and --dry-run writes nothing', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'mocakit.config.json'), JSON.stringify({ out: 'gen/moca.ts', context: { dir: 'ctx' } }));
+    const { io: cliIo, out } = capture();
+    expect(await runCli(['context', '--config', 'mocakit.config.json', '--dry-run', '--verbose'], cliIo, dir)).toBe(0);
+    expect(out).toEqual([
+      `Put documents to convert in ${join(dir, 'ctx/sources')}`,
+      'Converted 0 documents (0 sections, 0 unchanged)',
+      `Would write agent context to ${join(dir, 'ctx')}`,
+    ]);
+    expect(await readdir(dir)).toEqual(['mocakit.config.json']);
+  });
+
+  it('mocakit context reports a missing explicit config and rejects unknown flags', async () => {
+    const dir = await tempDir();
+    const { io: cliIo, err } = capture();
+    expect(await runCli(['context', '--config', 'nope.json'], cliIo, dir)).toBe(1);
+    expect(err.at(-1)).toMatch(/^mocakit: Config file not found: /);
+    expect(await runCli(['context', '--out', 'x'], cliIo, dir)).toBe(1);
   });
 });

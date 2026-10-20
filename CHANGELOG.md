@@ -4,6 +4,50 @@ All notable changes to mocakit are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/) (while below 1.0.0, a minor version can contain breaking changes).
 
+## [0.6.0] - 2026-10-19
+
+### Added
+
+- **Java introspection** (`java` in the config, or `--java`): `mocakit generate` reads the server's `CLASSPATH` with
+  `execute os command`, using fixed read-only commands only, and writes `moca-java/`: the classpath inventory in load
+  order (`INDEX.md`, `entries/`, `manifest.json`), the JARs and classes under the configured `roots` (default
+  `['$LESDIR']`), each verified against its sha256 and downloaded again only when it changed, custom/library
+  classification (`custom`, `libraries`), overridden classes, and links from Java command pages in `moca-commands/`
+  to the entry and source that implement them. Options: `roots`, `custom`, `libraries`, `dir`, `docs`, `maxFileSize`,
+  `decompiler`, `decompileLibraries`.
+  - **Roots** are `$LESDIR`, a `$NAME` server environment variable that holds a folder, the name of a folder next to
+    `$LESDIR`, or an absolute path. Anything else (such as `''`, `.`, `..` or `a/b`) is rejected before the server
+    is contacted, and a root that matches no classpath entry is an error.
+  - **Classification is per JAR**: in a wildcard folder, each JAR is custom or library on its own, and the
+    `custom`/`libraries` globs match only that JAR. Third-party JARs in a custom folder are not decompiled.
+  - **Overridden classes** list outer classes only, and one file reached through two classpath entries (or one
+    folder spelled two ways) is not counted as overriding itself.
+  - **Safe writes**: `generate` refuses to write into `moca-java/` through a symlink or junction, or onto a target
+    that is not a regular file. It checks this before writing anything.
+- **Decompiled source**: with a locally installed decompiler (`java.decompiler`), custom code (and libraries with
+  `decompileLibraries`) is decompiled on your machine, in a temporary folder, into `moca-java/src/`.
+- **Agent context from documents** (`context` in the config, or `--context`): documents in `moca-context/sources/`
+  become Markdown split by section (`maxSectionBytes`, default 61,440) with `INDEX.md` and per-document indexes.
+  Built-in `.md`, `.txt`, `.html`, `.docx` and `.csv`; user converters per extension (`converters`), with a cleanup
+  for plain-text output such as `pdftotext`; and agent conversion through `PENDING.md` and `agent/<document>.md` files
+  that mocakit never writes or deletes.
+- **`mocakit context`** (`--config`, `--dry-run`, `--verbose`): runs the agent-context step alone, with no server,
+  no credentials and no config file required.
+- `--java` / `--no-java` and `--context` / `--no-context` flags. `--from-snapshot` rebuilds `moca-java/` without
+  contacting the server.
+
+### Changed
+
+- **Schema introspection is on by default.** `mocakit generate` now writes `moca.schema.json`, `moca.schema.ts` and
+  `moca-schema/` unless the config sets `schema: false` or you pass `--no-schema`. A `--from-snapshot` run without a
+  schema snapshot skips schema (and logs `Skipped schema: …`) unless `schema` is set in the config or `--schema` is
+  passed, in which case the missing file is still an error. Schema needs a MOCA login with read access to the
+  database catalog; without it (or on an unsupported database, or with no tables found), a live run skips schema
+  with a warning (`Skipped schema: …; set schema: false to silence this`) and writes everything else. With `schema`
+  in the config or `--schema`, that failure still stops the run. `schema: false` restores the 0.5.0 behaviour.
+- mocakit is now described as an agentic development toolkit: the README opens with how a developer generates the
+  files and an AI coding agent builds from them offline, without touching the server.
+
 ## [0.5.0] - 2026-10-01
 
 ### Added
@@ -118,6 +162,7 @@ All notable changes to mocakit are documented here. The format follows
   `MocaArgumentError`) with password redaction, a `MocaOutputs` registry for row types, and date helpers
   (`formatMocaDate`, `parseMocaDate`).
 
+[0.6.0]: https://github.com/rnsaway/mocakit/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rnsaway/mocakit/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rnsaway/mocakit/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rnsaway/mocakit/compare/v0.2.0...v0.3.0

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CommandModel } from './agent-model.js';
 import { DOC_MARKER, PRIVATE_NOTICE } from './docs-writer.js';
+import type { JavaLink } from '../java/inventory.js';
 import { commandDocFile, emitCommandDocs, type CommandDocsOptions } from './emit-command-docs.js';
 
 const model = (over: Partial<CommandModel> & { name: string }): CommandModel => ({
@@ -169,5 +170,36 @@ describe('emitCommandDocs', () => {
     const out = emitCommandDocs([both], { ...base, tableHref: (t) => (t === 'widget' ? `../../moca-schema/tables/${t}.md` : undefined) })
       .files.get('commands/both.md')!;
     expect(out).toContain('- Reads: [`widget`](../../moca-schema/tables/widget.md), `hidden`');
+  });
+});
+
+describe('emitCommandDocs Java implementation links', () => {
+  const javaCmd = (name: string, javaClass: string): CommandModel =>
+    model({
+      name,
+      info: { name, key: name, active: { level: 'USRcust', levelSeq: 9000, type: 'Java Method', javaClass, cFunction: 'run' }, overrides: [] },
+    });
+  const links = new Map<string, JavaLink>([
+    ['acme a', { className: 'com.acme.cust.Widgets', method: 'run', entry: '/opt/acme/cust/lib/cust.jar', kind: 'custom', downloaded: true, source: 'src/cust/com/acme/cust/Widgets.java' }],
+    ['acme b', { className: 'org.lib.Util', method: 'run', entry: '/opt/acme/cust/lib/util-1.0.jar', kind: 'library', downloaded: false }],
+    ['acme c', { className: 'com.acme.Gone', method: 'run', entry: '', kind: 'unknown', downloaded: false }],
+  ]);
+  const opts: CommandDocsOptions = { ...base, javaLink: (key) => links.get(key), javaDirFromCommands: '../../moca-java' };
+  const cmds = [javaCmd('acme a', 'com.acme.cust.Widgets'), javaCmd('acme b', 'org.lib.Util'), javaCmd('acme c', 'com.acme.Gone')];
+  const { files } = emitCommandDocs(cmds, opts);
+
+  it('shows the three link forms after the Java line, with a relative source href', () => {
+    expect(files.get('commands/acme-a.md')).toContain(
+      'Java: `com.acme.cust.Widgets.run`\n\nImplemented in `/opt/acme/cust/lib/cust.jar` (custom) — source: [`src/cust/com/acme/cust/Widgets.java`](../../moca-java/src/cust/com/acme/cust/Widgets.java)',
+    );
+    expect(files.get('commands/acme-b.md')).toContain('Provided by `/opt/acme/cust/lib/util-1.0.jar` (not downloaded)');
+    expect(files.get('commands/acme-c.md')).toContain('Class not found on the classpath');
+  });
+
+  it('is unchanged without javaLink', () => {
+    const plain = emitCommandDocs(cmds, base).files;
+    const withOpt = emitCommandDocs(cmds, { ...base, javaLink: () => undefined, javaDirFromCommands: '../../moca-java' }).files;
+    expect([...withOpt]).toEqual([...plain]);
+    expect(plain.get('commands/acme-a.md')).not.toContain('Implemented in');
   });
 });
