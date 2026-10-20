@@ -74,8 +74,14 @@ export const DEFAULT_OUT = 'src/moca.generated.ts';
 /** How many individual warnings the CLI prints; the rest are summarized in one line. */
 const MAX_PRINTED_WARNINGS = 50;
 
-/** Prints warnings up to `limit` across all calls to `print`; `finish` reports the rest. */
-function warningPrinter(io: CliIo, limit: number): { print(warnings: readonly string[]): void; finish(): void } {
+/**
+ * Prints warnings up to `limit` across all calls to `print`; `finish` reports the rest. `always`
+ * prints a warning that must never be hidden, without counting it toward the limit.
+ */
+function warningPrinter(
+  io: CliIo,
+  limit: number,
+): { print(warnings: readonly string[]): void; always(warning: string): void; finish(): void } {
   let printed = 0;
   let suppressed = 0;
   return {
@@ -88,6 +94,9 @@ function warningPrinter(io: CliIo, limit: number): { print(warnings: readonly st
           suppressed++;
         }
       }
+    },
+    always(warning) {
+      io.error(`warning: ${warning}`);
     },
     finish() {
       if (suppressed > 0) io.error(`... and ${suppressed} more warnings (use --verbose to see all)`);
@@ -280,7 +289,8 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     commandRows = introspected.commandRows;
     if (schema !== null && deferSchemaDirs && !options.dryRun) await makeDirs(schemaDirs(schema));
     warn.print(introspected.warnings);
-    if (schemaSkipped !== null) warn.print([schemaSkipped]);
+    // The only sign that schema stopped, so it is never hidden by the warning cap.
+    if (schemaSkipped !== null) warn.always(schemaSkipped);
     if (schemaResult !== null) {
       schemaSnapshot = schemaResult.snapshot;
       warn.print(schemaResult.warnings);

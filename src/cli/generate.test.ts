@@ -483,6 +483,21 @@ describe('runGenerate with schema', () => {
     expect(await exists(join(dir, 'src/moca-schema'))).toBe(false);
   });
 
+  it('prints the default-on skip warning even past the warning cap', async () => {
+    const dir = await tempDir();
+    const run = io();
+    const bad = Array.from({ length: 60 }, (_, i) => [`bad'name${i}`]);
+    const fake = fakeMoca((r) => {
+      if (r.query === 'list active commands') return mocaXml(0, { columns: [{ name: 'command' }], rows: [['list orders'], ...bad] });
+      if (r.query === SQLSERVER_KEYS) return mocaXml(511, {}, 'permission denied');
+      return schemaServerHandler(r);
+    });
+    await runGenerate({ dryRun: false, cwd: dir, env, io: run.io, deps: { transport: fake.transport } });
+    expect(run.err.filter((line) => line.startsWith('warning: Skipped schema: '))).toHaveLength(1);
+    expect(run.err.filter((line) => line.startsWith(`warning: Skipped command "bad'name`))).toHaveLength(50);
+    expect(run.err.at(-1)).toBe('... and 10 more warnings (use --verbose to see all)');
+  });
+
   it.each([
     ['a transport error', (): string => { throw new MocaTransportError('socket hang up'); }, /socket hang up/],
     ['a protocol error', (): string => 'this is not a MOCA response', /Schema introspection failed/],
