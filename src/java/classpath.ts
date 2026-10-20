@@ -201,7 +201,7 @@ export function selectEntries(
     const r = resolved[i];
     if (!out.some((e) => e.usable && isUnder(normalize(e.path, family), r, family))) {
       throw new Error(
-        `java.roots: "${root}" matches no classpath entry; use $LESDIR, the name of a folder next to it, or an absolute path`,
+        `java.roots: "${root}" matches no classpath entry; use $LESDIR, a $NAME server variable, the name of a folder next to $LESDIR, or an absolute path`,
       );
     }
   });
