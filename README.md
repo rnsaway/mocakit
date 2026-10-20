@@ -86,6 +86,10 @@ allowScripts". That's expected, and the build still runs. If a future npm blocks
 
 `mocakit generate` introspects a live MOCA instance (`list active commands` and `list active command arguments`)
 and writes one TypeScript file with a typed method per active command, plus a JSON snapshot of everything it saw.
+By default it also reads the database schema and writes `moca.schema.json`, `moca.schema.ts` and `moca-schema/`
+(see [Schema types](#schema-types-agent-docs--mocafrom)). Schema needs a MOCA login with read access to the
+database catalog; without it, the run skips schema with a warning. Set `schema: false` in the config (or pass
+`--no-schema`) to turn schema off.
 
 ```ts
 // mocakit.config.ts
@@ -159,9 +163,10 @@ script's. Use `npm run moca -- generate` or `npm run moca:generate`.
 - A variable that is set but empty in your shell (`MOCA_PASSWORD=`) still counts as set, so it overrides the file.
   Unset it (`unset MOCA_PASSWORD`) if you want the file's value.
 
-This writes `src/moca.generated.ts` and, next to it, a `src/moca.commands.json` snapshot. **Commit both files.**
-The snapshot lets you regenerate without contacting the server — for example in CI, or after only changing
-`include`/`exclude`/`levels`:
+This writes `src/moca.generated.ts` and, next to it, a `src/moca.commands.json` snapshot. With schema on (the
+default) it also writes `src/moca.schema.json`, `src/moca.schema.ts` and `src/moca-schema/`. **Commit all of
+them** (both command files, plus the schema files when schema ran). The snapshots let you regenerate without
+contacting the server — for example in CI, or after only changing `include`/`exclude`/`levels`:
 
 ```bash
 npx mocakit generate --from-snapshot src/moca.commands.json
