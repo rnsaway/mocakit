@@ -114,6 +114,14 @@ describe('overriddenClasses', () => {
       { className: 'com.acme.B', winner: w, losers: l },
     ]);
   });
+  it('does not report an override when one entry has only an inner class of the other entry\'s class', () => {
+    expect(
+      overriddenClasses([
+        { path: '/opt/acme/cust/lib', file: '/opt/acme/cust/lib/a.jar', classes: ['p.A', 'p.A$In'] },
+        { path: '/opt/acme/cust/ext', file: '/opt/acme/cust/ext/b.jar', classes: ['p.A$In'] },
+      ]),
+    ).toEqual([]);
+  });
   it('skips a class whose providers are all the same file', () => {
     const file = '/opt/acme/cust/lib/a.jar';
     expect(

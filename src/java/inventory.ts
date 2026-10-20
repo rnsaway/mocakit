@@ -149,7 +149,7 @@ export function classifyEntry(
  * Outer classes provided by several entries: the first entry in classpath order wins. Each item is
  * one provider in classpath order: an entry (`path`), optionally one canonical file in it, and its
  * classes (`null` is skipped). One file reached through several entries provides a class once, and
- * inner classes (`Outer$Inner`) count as their outer class.
+ * only top-level classes count: inner classes (`Outer$Inner`) are left out, as they follow their outer class.
  */
 export function overriddenClasses(
   providers: Array<{ path: string; file?: string; classes: string[] | null }>,
@@ -159,7 +159,7 @@ export function overriddenClasses(
   for (const provider of providers) {
     if (provider.classes === null) continue;
     const key = provider.file !== undefined ? `file\n${provider.file}` : `entry\n${provider.path}`;
-    for (const className of new Set(provider.classes.map((c) => c.split('$')[0]!))) {
+    for (const className of new Set(provider.classes.filter((c) => !c.includes('$')))) {
       const seen = byClass.get(className) ?? new Map<string, string>();
       byClass.set(className, seen);
       if (!seen.has(key)) seen.set(key, provider.path);
