@@ -3,7 +3,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   checkDecompiler,
   decompile,
@@ -30,19 +30,27 @@ function withMode<T>(mode: string, fn: () => Promise<T>): Promise<T> {
   });
 }
 
-const before0 = new Set<string>();
-const tmpEntries = () => new Set(readdirSync(tmpdir()).filter((n) => n.startsWith('mocakit-decompile-')));
+// Each test gets its own temp root, so leftovers are checked without listing the shared tmpdir.
+const roots: string[] = [];
+const newRoot = (): string => {
+  const root = mkdtempSync(join(tmpdir(), 'mocakit-decompile-test-'));
+  roots.push(root);
+  return root;
+};
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
 
 describe('decompile', () => {
   it('returns the sources map for ok output and removes the temp folder', async () => {
-    const before = tmpEntries();
-    const r = await withMode('ok', () => decompile(config(), jar()));
+    const root = newRoot();
+    const r = await withMode('ok', () => decompile(config(), jar(), { tmpRoot: root }));
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect([...r.sources.keys()]).toEqual(['com/acme/cust/Widgets.java']);
       expect(r.sources.get('com/acme/cust/Widgets.java')).toContain('class Widgets');
     }
-    expect(tmpEntries()).toEqual(before);
+    expect(readdirSync(root)).toEqual([]);
   });
 
   it('accepts a classes tree', async () => {
@@ -55,22 +63,22 @@ describe('decompile', () => {
   });
 
   it('warns naming the input when the decompiler fails', async () => {
-    const before = tmpEntries();
-    const r = await withMode('fail', () => decompile(config(), jar()));
+    const root = newRoot();
+    const r = await withMode('fail', () => decompile(config(), jar(), { tmpRoot: root }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.warning).toContain('cust.jar');
-    expect(tmpEntries()).toEqual(before);
+    expect(readdirSync(root)).toEqual([]);
   });
 
   it('warns about a timeout', async () => {
-    const before = tmpEntries();
-    const r = await withMode('hang', () => decompile(config({ timeoutMs: 200 }), jar()));
+    const root = newRoot();
+    const r = await withMode('hang', () => decompile(config({ timeoutMs: 200 }), jar(), { tmpRoot: root }));
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.warning).toMatch(/timed out/);
       expect(r.warning).toContain('cust.jar');
     }
-    expect(tmpEntries()).toEqual(before);
+    expect(readdirSync(root)).toEqual([]);
   });
 
   it('warns when the decompiler produced no source', async () => {
@@ -86,13 +94,13 @@ describe('decompile', () => {
   it.each([['/abs/x.class'], ['../x.class'], ['a/../../x.class'], ['a\\b.class'], ['C:x.class'], ['C:/x.class'], ['']])(
     'rejects the unsafe key %j without writing',
     async (key) => {
-      const before = tmpEntries();
+      const root = newRoot();
       const r = await withMode('ok', () =>
-        decompile(config(), { name: 'bad', files: new Map([[key, new Uint8Array([1])]]) }),
+        decompile(config(), { name: 'bad', files: new Map([[key, new Uint8Array([1])]]) }, { tmpRoot: root }),
       );
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.warning).toContain('bad');
-      expect(tmpEntries()).toEqual(before);
+      expect(readdirSync(root)).toEqual([]);
     },
   );
 
@@ -101,25 +109,25 @@ describe('decompile', () => {
       ['a', new Uint8Array([1])],
       ['a/b.class', new Uint8Array([2])],
     ]);
-    const before = tmpEntries();
-    const r = await withMode('ok', () => decompile(config(), { name: 'clash', files }));
+    const root = newRoot();
+    const r = await withMode('ok', () => decompile(config(), { name: 'clash', files }, { tmpRoot: root }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.warning).toMatch(/^decompile failed for clash: /);
-    expect(tmpEntries()).toEqual(before);
+    expect(readdirSync(root)).toEqual([]);
   });
 
   it('keeps an ok result when removing the temp folder fails', async () => {
-    for (const n of tmpEntries()) before0.add(n);
+    const root = newRoot();
     const failingRm = (async () => {
       throw new Error('EBUSY');
     }) as unknown as typeof rm;
-    const r = await withMode('ok', () => decompile(config(), jar(), { rm: failingRm }));
+    const r = await withMode('ok', () => decompile(config(), jar(), { rm: failingRm, tmpRoot: root }));
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.cleanupWarning).toMatch(/^temp folder not removed: /);
-    const r2 = await withMode('fail', () => decompile(config(), jar(), { rm: failingRm }));
+    const r2 = await withMode('fail', () => decompile(config(), jar(), { rm: failingRm, tmpRoot: root }));
     expect(r2.ok).toBe(false);
     if (!r2.ok) expect(r2.warning).toMatch(/\(temp folder not removed: .+\)$/);
-    for (const n of tmpEntries()) if (!before0.has(n)) rmSync(join(tmpdir(), n), { recursive: true, force: true });
+    expect(readdirSync(root)).toHaveLength(2);
   });
 
   it('does not follow symlinks in decompiler output', async () => {

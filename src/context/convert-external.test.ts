@@ -2,7 +2,7 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { checkConverters, convertExternal, converterHash, type ConverterConfig } from './convert-external.js';
 
 const FAKE = fileURLToPath(new URL('../../test/fixtures/fake-converter.mjs', import.meta.url));
@@ -15,8 +15,16 @@ const NAME = 'Odd "name" & stuff.PDF';
 const source = { name: NAME, bytes: new TextEncoder().encode('%PDF-fake') };
 const MD = '# Gadget Guide\n\n## Parts\n\nInput was given.\n';
 
-const leftovers = async (): Promise<string[]> =>
-  (await readdir(tmpdir())).filter((n) => n.startsWith('mocakit-convert-'));
+// Each test gets its own temp root, so leftovers are checked without listing the shared tmpdir.
+const roots: string[] = [];
+const newRoot = async (): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'mocakit-convert-test-'));
+  roots.push(root);
+  return root;
+};
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 const lockedRm = ((): Promise<void> => Promise.reject(new Error('locked'))) as unknown as typeof rm;
 
 describe('convertExternal', () => {
@@ -90,24 +98,21 @@ describe('convertExternal', () => {
   });
 
   it('removes the temp folder, also after a failure', async () => {
-    const before = await leftovers();
-    await convertExternal(config('ok-md'), source);
-    await convertExternal(config('fail'), source);
-    await convertExternal(config('empty', {}, true), source);
-    expect(await leftovers()).toEqual(before);
+    const tmpRoot = await newRoot();
+    await convertExternal(config('ok-md'), source, { tmpRoot });
+    await convertExternal(config('fail'), source, { tmpRoot });
+    await convertExternal(config('empty', {}, true), source, { tmpRoot });
+    expect(await readdir(tmpRoot)).toEqual([]);
   });
 
   it('never rejects when the temp folder cannot be removed', async () => {
-    const before = await leftovers();
-    const ok = await convertExternal(config('ok-md'), source, { rm: lockedRm });
+    const tmpRoot = await newRoot();
+    const ok = await convertExternal(config('ok-md'), source, { rm: lockedRm, tmpRoot });
     expect(ok).toHaveProperty('markdown');
     expect((ok as { cleanupWarning?: string }).cleanupWarning).toMatch(/^temp folder not removed: /);
-    const failed = await convertExternal(config('fail'), source, { rm: lockedRm });
+    const failed = await convertExternal(config('fail'), source, { rm: lockedRm, tmpRoot });
     expect((failed as { warning: string }).warning).toMatch(/\(temp folder not removed: .+\)$/);
-    const after = await leftovers();
-    await Promise.all(
-      after.filter((n) => !before.includes(n)).map((n) => rm(join(tmpdir(), n), { recursive: true, force: true })),
-    );
+    expect(await readdir(tmpRoot)).toHaveLength(2);
   });
 });
 

@@ -17,6 +17,8 @@ export type ConvertExternalResult = { markdown: string; cleanupWarning?: string 
 
 export interface ConvertExternalDeps {
   rm?: typeof rm;
+  /** Folder to create the temp folder in; default `os.tmpdir()`. */
+  tmpRoot?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -65,7 +67,7 @@ export async function convertExternal(
   let tmp: string | undefined;
   let result: ConvertExternalResult;
   try {
-    tmp = await mkdtemp(join(tmpdir(), 'mocakit-convert-'));
+    tmp = await mkdtemp(join(deps.tmpRoot ?? tmpdir(), 'mocakit-convert-'));
     result = await run(config, source, tmp);
   } catch (e) {
     result = { warning: `conversion failed for ${source.name}: ${e instanceof Error ? e.message : String(e)}` };

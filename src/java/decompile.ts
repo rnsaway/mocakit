@@ -13,6 +13,8 @@ export type DecompileResult =
 
 export interface DecompileDeps {
   rm?: typeof rm;
+  /** Folder to create the temp folder in; default `os.tmpdir()`. */
+  tmpRoot?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -84,7 +86,7 @@ export async function decompile(
   let tmp: string | undefined;
   let result: DecompileResult;
   try {
-    tmp = await mkdtemp(join(tmpdir(), 'mocakit-decompile-'));
+    tmp = await mkdtemp(join(deps.tmpRoot ?? tmpdir(), 'mocakit-decompile-'));
     result = await run(config, input, tmp);
   } catch (e) {
     result = { ok: false, warning: `decompile failed for ${input.name}: ${e instanceof Error ? e.message : String(e)}` };
