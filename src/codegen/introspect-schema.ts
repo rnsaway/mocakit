@@ -97,14 +97,24 @@ async function readCatalog(client: MocaClient, dialect: Dialect): Promise<RawSch
   return { columns, keys: await client.exec(oracleKeys(scope)) };
 }
 
+/** Ends the catalog-failure error; `schemaSkipReason` strips it for the default-on warning. */
+export const SCHEMA_SKIP_HINT = 'Set schema: false in the config (or pass --no-schema) to skip it.';
+
 function wrap(error: unknown): Error {
   const status = error instanceof MocaError && error.status !== -1 ? ` (MOCA status ${error.status})` : '';
   const message = error instanceof Error ? error.message : String(error);
   return new Error(
     `Schema introspection failed${status}: ${message}. The MOCA login needs read access to the database catalog ` +
-      '(sys.* on SQL Server, USER_* on Oracle). Remove "schema" from the config (or pass --no-schema) to skip it.',
+      `(sys.* on SQL Server, USER_* on Oracle). ${SCHEMA_SKIP_HINT}`,
     { cause: error },
   );
+}
+
+/** The reason part of a schema introspection error, without the skip hint or a final period. */
+export function schemaSkipReason(error: unknown): string {
+  let message = error instanceof Error ? error.message : String(error);
+  if (message.endsWith(` ${SCHEMA_SKIP_HINT}`)) message = message.slice(0, -SCHEMA_SKIP_HINT.length - 1);
+  return message.endsWith('.') ? message.slice(0, -1) : message;
 }
 
 /** Reads the login schema's tables, views, columns, comments and primary keys. */

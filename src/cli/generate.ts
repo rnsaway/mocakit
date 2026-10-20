@@ -18,7 +18,7 @@ import { osExecFor, readJavaServer, type JavaServerRead } from '../java/server-r
 import { emit } from '../codegen/emit.js';
 import { emitSchema, filterTables, type SchemaFilter } from '../codegen/emit-schema.js';
 import { checkSchemaDocsTargets, emitSchemaDocs, writeSchemaDocs } from '../codegen/emit-schema-docs.js';
-import { introspectSchema } from '../codegen/introspect-schema.js';
+import { introspectSchema, schemaSkipReason } from '../codegen/introspect-schema.js';
 import { readSchemaSnapshot, sameSchema, writeSchemaSnapshot, type SchemaSnapshot } from '../codegen/schema-snapshot.js';
 import { filterCommands } from '../codegen/filter.js';
 import { introspect, type IntrospectResult } from '../codegen/introspect.js';
@@ -192,18 +192,8 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
   const java = resolveJavaSettings(config, options.java, configDir, out);
   const contextSettings = resolveContextSettings(config, options.context, configDir, out);
 
-  if (!options.dryRun) {
-    // Fail fast, before contacting the server, if an output directory can't be created.
-    try {
-      await mkdir(dirname(out), { recursive: true });
-    } catch (error) {
-      throw new Error(`Cannot write ${out}: ${errorDetail(error)}`);
-    }
-    const dirs = [
-      ...(schema === null ? [] : [dirname(schema.snapshot), dirname(schema.out), ...(schema.docs === null ? [] : [schema.docs])]),
-      ...(commandDocs !== null && options.fromSnapshot === undefined ? [commandDocs.out] : []),
-      ...(api === null ? [] : [dirname(api.snapshot), dirname(api.out), ...(api.docs === null ? [] : [api.docs])]),
-    ];
+  const schemaDirs = (s: ResolvedSchema): string[] => [dirname(s.snapshot), dirname(s.out), ...(s.docs === null ? [] : [s.docs])];
+  const makeDirs = async (dirs: readonly string[]): Promise<void> => {
     for (const dir of dirs) {
       try {
         await mkdir(dir, { recursive: true });
@@ -211,6 +201,22 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
         throw new Error(`Cannot write ${dir}: ${errorDetail(error)}`);
       }
     }
+  };
+  // Schema on only by default may still be skipped after a live catalog failure, so its folders
+  // are created only once the catalog was read (a skipped run then writes what `schema: false` writes).
+  const deferSchemaDirs = schema !== null && !schema.explicit && options.fromSnapshot === undefined;
+  if (!options.dryRun) {
+    // Fail fast, before contacting the server, if an output directory can't be created.
+    try {
+      await mkdir(dirname(out), { recursive: true });
+    } catch (error) {
+      throw new Error(`Cannot write ${out}: ${errorDetail(error)}`);
+    }
+    await makeDirs([
+      ...(schema === null || deferSchemaDirs ? [] : schemaDirs(schema)),
+      ...(commandDocs !== null && options.fromSnapshot === undefined ? [commandDocs.out] : []),
+      ...(api === null ? [] : [dirname(api.snapshot), dirname(api.out), ...(api.docs === null ? [] : [api.docs])]),
+    ]);
   }
 
   let snapshot: Snapshot;
@@ -245,9 +251,19 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     let introspected: Awaited<ReturnType<typeof introspect>>;
     let schemaResult: Awaited<ReturnType<typeof introspectSchema>> | null = null;
     let codesResult: Awaited<ReturnType<typeof readCodes>> | null = null;
+    let schemaSkipped: string | null = null;
     try {
       introspected = await introspect(client, { version: VERSION, server: connection.url, keepCommandRows: commandDocs !== null || java !== null });
-      if (schema !== null) schemaResult = await introspectSchema(client, { version: VERSION, server: connection.url });
+      if (schema !== null) {
+        try {
+          schemaResult = await introspectSchema(client, { version: VERSION, server: connection.url });
+        } catch (error) {
+          // On only by default: a catalog the login can't read skips schema instead of failing the run.
+          if (schema.explicit) throw error;
+          schemaSkipped = `Skipped schema: ${schemaSkipReason(error)}; set schema: false to silence this`;
+          schema = null;
+        }
+      }
       if (codesSettings !== null) {
         codesResult = await readCodes(client, codesSettings.locale ?? client.session.locale ?? 'US_ENGLISH');
       }
@@ -261,7 +277,9 @@ export async function runGenerate(options: GenerateOptions): Promise<void> {
     }
     snapshot = introspected.snapshot;
     commandRows = introspected.commandRows;
+    if (schema !== null && deferSchemaDirs && !options.dryRun) await makeDirs(schemaDirs(schema));
     warn.print(introspected.warnings);
+    if (schemaSkipped !== null) warn.print([schemaSkipped]);
     if (schemaResult !== null) {
       schemaSnapshot = schemaResult.snapshot;
       warn.print(schemaResult.warnings);

@@ -443,6 +443,54 @@ describe('runGenerate with schema', () => {
     expect(await exists(join(dir, 'src/moca.schema.json'))).toBe(false);
   });
 
+  it('on only by default, skips schema with a warning when the catalog cannot be read', async () => {
+    const listing = async (root: string): Promise<string[]> => {
+      const entries = await readdir(root, { recursive: true, withFileTypes: true });
+      return entries.map((e) => join(e.parentPath, e.name).slice(root.length).split('\\').join('/')).sort();
+    };
+    const failing = () => schemaServer({ keys: mocaXml(511, {}, 'permission denied') });
+
+    const dir = await tempDir();
+    const run = io();
+    await runGenerate({ commandDocs: true, dryRun: false, cwd: dir, env, io: run.io, deps: { transport: failing().transport } });
+
+    const off = await tempDir();
+    const offRun = io();
+    await runGenerate({ schema: false, commandDocs: true, dryRun: false, cwd: off, env, io: offRun.io, deps: { transport: failing().transport } });
+
+    expect(await exists(join(dir, 'src/moca.schema.json'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca.schema.ts'))).toBe(false);
+    expect(await exists(join(dir, 'src/moca-schema'))).toBe(false);
+    expect(await listing(dir)).toEqual(await listing(off));
+    expect(await readFile(join(dir, 'src/moca.generated.ts'), 'utf8')).toBe(await readFile(join(off, 'src/moca.generated.ts'), 'utf8'));
+    expect(run.out.map((line) => line.split(dir).join('<dir>'))).toEqual(offRun.out.map((line) => line.split(off).join('<dir>')));
+    expect(run.out).toContain('Command docs written without table cross-references (schema is off)');
+    expect(run.err).toEqual([
+      'warning: Skipped schema: Schema introspection failed (MOCA status 511): MOCA command failed with status 511: permission denied. The MOCA login needs read access ' +
+        'to the database catalog (sys.* on SQL Server, USER_* on Oracle); set schema: false to silence this',
+    ]);
+    expect(offRun.err).toEqual([]);
+  });
+
+  it('on only by default, skips schema with a warning on an unsupported database', async () => {
+    const dir = await tempDir();
+    const run = io();
+    const fake = fakeMoca((r) => (r.query === 'get database' ? mocaXml(0, { columns: [{ name: 'database' }], rows: [['db2']] }) : schemaServerHandler(r)));
+    await runGenerate({ dryRun: false, cwd: dir, env, io: run.io, deps: { transport: fake.transport } });
+    expect(run.err).toEqual(['warning: Skipped schema: Unsupported database "db2"; mocakit supports SQL Server and Oracle; set schema: false to silence this']);
+    expect(await exists(join(dir, 'src/moca.generated.ts'))).toBe(true);
+    expect(await exists(join(dir, 'src/moca-schema'))).toBe(false);
+  });
+
+  it('explicit --schema still fails on a catalog error, with the schema: false hint', async () => {
+    const dir = await tempDir();
+    const fake = schemaServer({ keys: mocaXml(511, {}, 'permission denied') });
+    await expect(
+      runGenerate({ schema: true, dryRun: false, cwd: dir, env, io: io().io, deps: { transport: fake.transport } }),
+    ).rejects.toThrow('Set schema: false in the config (or pass --no-schema) to skip it.');
+    expect(await exists(join(dir, 'src/moca.generated.ts'))).toBe(false);
+  });
+
   it('refuses to run, writing nothing, when a hand-written file is in the docs directory', async () => {
     const dir = await tempDir();
     await mkdir(join(dir, 'src/moca-schema'), { recursive: true });
