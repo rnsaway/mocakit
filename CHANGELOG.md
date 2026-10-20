@@ -15,6 +15,15 @@ All notable changes to mocakit are documented here. The format follows
   classification (`custom`, `libraries`), overridden classes, and links from Java command pages in `moca-commands/`
   to the entry and source that implement them. Options: `roots`, `custom`, `libraries`, `dir`, `docs`, `maxFileSize`,
   `decompiler`, `decompileLibraries`.
+  - **Roots** are `$LESDIR`, a `$NAME` server environment variable that holds a folder, the name of a folder next to
+    `$LESDIR`, or an absolute path. Anything else (such as `''`, `.`, `..` or `a/b`) is rejected before the server
+    is contacted, and a root that matches no classpath entry is an error.
+  - **Classification is per JAR**: in a wildcard folder, each JAR is custom or library on its own, and the
+    `custom`/`libraries` globs match only that JAR. Third-party JARs in a custom folder are not decompiled.
+  - **Overridden classes** list outer classes only, and one file reached through two classpath entries (or one
+    folder spelled two ways) is not counted as overriding itself.
+  - **Safe writes**: `generate` refuses to write into `moca-java/` through a symlink or junction, or onto a target
+    that is not a regular file. It checks this before writing anything.
 - **Decompiled source**: with a locally installed decompiler (`java.decompiler`), custom code (and libraries with
   `decompileLibraries`) is decompiled on your machine, in a temporary folder, into `moca-java/src/`.
 - **Agent context from documents** (`context` in the config, or `--context`): documents in `moca-context/sources/`
