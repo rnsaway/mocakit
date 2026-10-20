@@ -95,7 +95,7 @@ live('live MOCA server', () => {
   it('returns [] for a query with no rows (510), and throws 510 with noRowsIsError', async () => {
     // Oracle syntax; on another SQL dialect the query itself fails, which is logged rather
     // than failed, since it says nothing about mocakit's 510 handling.
-    const query = '[select 1 x from dual where 1 = 0]';
+    const query = '[select 1 x from dual where rownum < 1]';
     let rows: unknown[];
     try {
       rows = await client.exec(query);
